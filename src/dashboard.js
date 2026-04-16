@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as api from './teamhood/api.js';
+import { zohoRequest } from './zoho/api.js';
 import { parseCardTitle } from './utils/title-parser.js';
 import { lookupClient } from './utils/client-lookup.js';
 import { findSimilarQuotes } from './utils/quote-matcher.js';
@@ -81,6 +82,79 @@ export function createDashboardRouter() {
     }
   });
 
+  // --- API: List live quotes (sent/accepted, not yet marked for invoice) ---
+  router.get('/api/live-quotes', async (_req, res) => {
+    try {
+      const allEstimates = [];
+      for (const status of ['sent', 'accepted']) {
+        let page = 1;
+        while (true) {
+          const data = await zohoRequest('GET', `/estimates?per_page=200&page=${page}&status=${status}&sort_column=date&sort_order=D`);
+          allEstimates.push(...(data.estimates || []));
+          if (!data.page_context?.has_more_page) break;
+          page++;
+        }
+      }
+
+      // Fetch custom fields to check invoice status — batch to avoid rate limits
+      const liveQuotes = [];
+      for (let i = 0; i < allEstimates.length; i += 5) {
+        const batch = allEstimates.slice(i, i + 5);
+        const details = await Promise.all(batch.map(est =>
+          zohoRequest('GET', `/estimates/${est.estimate_id}`)
+        ));
+        for (const detail of details) {
+          const est = detail.estimate;
+          if (!est) continue;
+          const invoiceStatus = (est.custom_fields || []).find(f => f.api_name === 'cf_invoice_status')?.value || '-';
+          if (invoiceStatus === 'C01 - Full Invoice') continue;
+          liveQuotes.push({
+            estimateId: est.estimate_id,
+            estimateNumber: est.estimate_number,
+            date: est.date,
+            status: est.status,
+            customer: est.customer_name,
+            customerId: est.customer_id,
+            project: est.project?.project_name || '',
+            reference: est.reference_number || '',
+            salesperson: est.salesperson_name || '',
+            invoiceStatus,
+            total: est.total,
+            subTotal: est.sub_total,
+            lineItems: (est.line_items || []).map(li => ({
+              name: li.name, quantity: li.quantity, rate: li.rate, total: li.item_total,
+            })),
+          });
+        }
+        if (i + 5 < allEstimates.length) await new Promise(r => setTimeout(r, 200));
+      }
+
+      res.json({ success: true, quotes: liveQuotes });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- API: Mark quote as ready for invoice ---
+  router.post('/api/live-quotes/:estimateId/invoice-ready', async (req, res) => {
+    try {
+      const { estimateId } = req.params;
+      const result = await zohoRequest('PUT', `/estimates/${estimateId}`, {
+        custom_fields: [{ api_name: 'cf_invoice_status', value: 'C01 - Full Invoice' }],
+      });
+      if (result.code && result.code !== 0) {
+        throw new Error(result.message || JSON.stringify(result));
+      }
+      res.json({
+        success: true,
+        estimateNumber: result.estimate?.estimate_number,
+        message: 'Marked as ready for invoice',
+      });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // --- Dashboard UI ---
   router.get('/', (_req, res) => {
     res.send(DASHBOARD_HTML);
@@ -147,6 +221,21 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .detail-row.open { display: table-row; }
     .detail-cell { background: #0d1117; padding: 16px !important; font-size: 12px; color: #8b949e; }
     .load-time { font-size: 12px; color: #484f58; margin-left: 12px; }
+    .tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 2px solid #30363d; }
+    .tab { padding: 10px 24px; font-size: 14px; font-weight: 600; color: #8b949e; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.2s; }
+    .tab:hover { color: #e1e4e8; }
+    .tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+    .tab-count { background: #30363d; color: #e1e4e8; padding: 1px 8px; border-radius: 10px; font-size: 11px; margin-left: 6px; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .live-row { font-size: 13px; }
+    .live-status { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+    .live-status.sent { background: #1f3a5c; color: #58a6ff; }
+    .live-status.accepted { background: #1f3a2e; color: #3fb950; }
+    .btn-invoice { background: #8957e5; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.2s; }
+    .btn-invoice:hover { background: #a371f7; }
+    .btn-invoice:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+    .btn-invoice.done { background: #1f6feb; cursor: default; }
 
     /* Mobile card layout */
     .mobile-cards { display: none; }
@@ -188,27 +277,60 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <div class="header">
     <div>
       <h1>Node Group - Quote Dashboard</h1>
-      <p class="subtitle">Teamhood "Price Required" cards &rarr; Zoho draft estimates</p>
     </div>
     <div>
       <span class="load-time" id="loadTime"></span>
-      <button class="btn-refresh" id="refreshBtn" onclick="loadQuotes()">Refresh</button>
+      <button class="btn-refresh" id="refreshBtn" onclick="refreshCurrentTab()">Refresh</button>
     </div>
   </div>
 
-  <div class="stats" id="stats"></div>
-
-  <div class="filters">
-    <input type="text" id="search" placeholder="Search cards..." oninput="filterTable()">
-    <select id="clientFilter" onchange="filterTable()"><option value="">All clients</option></select>
-    <select id="assigneeFilter" onchange="filterTable()"><option value="">All assignees</option></select>
+  <div class="tabs">
+    <div class="tab active" data-tab="pricing" onclick="switchTab('pricing')">Pricing <span class="tab-count" id="pricingCount">0</span></div>
+    <div class="tab" data-tab="live" onclick="switchTab('live')">Live Quotes <span class="tab-count" id="liveCount">0</span></div>
   </div>
 
-  <div id="error"></div>
-  <div id="content"><div class="loading">Loading quotes from Teamhood...</div></div>
+  <!-- Pricing Tab -->
+  <div class="tab-panel active" id="pricingPanel">
+    <div class="stats" id="stats"></div>
+    <div class="filters">
+      <input type="text" id="search" placeholder="Search cards..." oninput="filterTable()">
+      <select id="clientFilter" onchange="filterTable()"><option value="">All clients</option></select>
+      <select id="assigneeFilter" onchange="filterTable()"><option value="">All assignees</option></select>
+    </div>
+
+    <div id="error"></div>
+    <div id="content"><div class="loading">Loading quotes from Teamhood...</div></div>
+  </div>
+
+  <!-- Live Quotes Tab -->
+  <div class="tab-panel" id="livePanel">
+    <div class="stats" id="liveStats"></div>
+    <div class="filters">
+      <input type="text" id="liveSearch" placeholder="Search quotes..." oninput="filterLiveTable()">
+      <select id="liveClientFilter" onchange="filterLiveTable()"><option value="">All clients</option></select>
+    </div>
+    <div id="liveError"></div>
+    <div id="liveContent"><div class="loading">Click Refresh to load live quotes...</div></div>
+  </div>
 
   <script>
     let allQuotes = [];
+    let allLiveQuotes = [];
+    let currentTab = 'pricing';
+    let liveLoaded = false;
+
+    function switchTab(tab) {
+      currentTab = tab;
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+      document.getElementById('pricingPanel').classList.toggle('active', tab === 'pricing');
+      document.getElementById('livePanel').classList.toggle('active', tab === 'live');
+      if (tab === 'live' && !liveLoaded) loadLiveQuotes();
+    }
+
+    function refreshCurrentTab() {
+      if (currentTab === 'pricing') loadQuotes();
+      else { liveLoaded = false; loadLiveQuotes(); }
+    }
 
     async function loadQuotes() {
       const btn = document.getElementById('refreshBtn');
@@ -467,6 +589,145 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         if (e.target !== desktopInput && desktopInput) desktopInput.value = e.target.value;
         if (e.target !== mobileInput && mobileInput) mobileInput.value = e.target.value;
       }
+    });
+
+    // --- Live Quotes ---
+
+    async function loadLiveQuotes() {
+      const btn = document.getElementById('refreshBtn');
+      btn.disabled = true;
+      btn.textContent = 'Loading...';
+      document.getElementById('liveError').innerHTML = '';
+      const start = Date.now();
+
+      try {
+        const res = await fetch('/api/live-quotes');
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        allLiveQuotes = data.quotes;
+        liveLoaded = true;
+        const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+        document.getElementById('loadTime').textContent = 'Loaded in ' + elapsed + 's';
+        document.getElementById('liveCount').textContent = allLiveQuotes.length;
+        renderLiveStats();
+        populateLiveFilters();
+        renderLiveTable();
+      } catch (err) {
+        document.getElementById('liveError').innerHTML = '<div class="error">' + err.message + '</div>';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Refresh';
+      }
+    }
+
+    function renderLiveStats() {
+      const total = allLiveQuotes.length;
+      const sent = allLiveQuotes.filter(q => q.status === 'sent').length;
+      const accepted = allLiveQuotes.filter(q => q.status === 'accepted').length;
+      const totalValue = allLiveQuotes.reduce((sum, q) => sum + (q.total || 0), 0);
+      const clients = new Set(allLiveQuotes.map(q => q.customer)).size;
+
+      document.getElementById('liveStats').innerHTML =
+        '<div class="stat"><div class="stat-value">' + total + '</div><div class="stat-label">Live Quotes</div></div>' +
+        '<div class="stat"><div class="stat-value">' + sent + '</div><div class="stat-label">Sent</div></div>' +
+        '<div class="stat"><div class="stat-value">' + accepted + '</div><div class="stat-label">Accepted</div></div>' +
+        '<div class="stat"><div class="stat-value">&pound;' + totalValue.toLocaleString() + '</div><div class="stat-label">Total Value</div></div>' +
+        '<div class="stat"><div class="stat-value">' + clients + '</div><div class="stat-label">Clients</div></div>';
+    }
+
+    function populateLiveFilters() {
+      const clients = [...new Set(allLiveQuotes.map(q => q.customer).filter(Boolean))].sort();
+      const cf = document.getElementById('liveClientFilter');
+      cf.innerHTML = '<option value="">All clients</option>';
+      clients.forEach(c => { const o = document.createElement('option'); o.value = c; o.text = c; cf.add(o); });
+    }
+
+    function getFilteredLiveQuotes() {
+      const search = document.getElementById('liveSearch').value.toLowerCase();
+      const client = document.getElementById('liveClientFilter').value;
+      return allLiveQuotes.filter(q => {
+        const text = (q.estimateNumber + ' ' + q.customer + ' ' + q.project + ' ' + q.reference).toLowerCase();
+        const matchSearch = !search || text.includes(search);
+        const matchClient = !client || q.customer === client;
+        return matchSearch && matchClient;
+      });
+    }
+
+    function filterLiveTable() { renderLiveTable(getFilteredLiveQuotes()); }
+
+    function renderLiveTable(quotes) {
+      const list = quotes || allLiveQuotes;
+
+      // Desktop table
+      let tableHtml = '<div class="desktop-table"><table><thead><tr>' +
+        '<th>Quote</th><th>Date</th><th>Client</th><th>Project</th><th>Reference</th>' +
+        '<th>Status</th><th>Total</th><th></th>' +
+        '</tr></thead><tbody>';
+
+      for (const q of list) {
+        tableHtml += '<tr class="live-row">' +
+          '<td><strong>' + q.estimateNumber + '</strong></td>' +
+          '<td>' + (q.date || '') + '</td>' +
+          '<td>' + (q.customer || '') + '</td>' +
+          '<td>' + (q.project || '') + '</td>' +
+          '<td>' + (q.reference || '') + '</td>' +
+          '<td><span class="live-status ' + q.status + '">' + q.status + '</span></td>' +
+          '<td><strong>&pound;' + (q.total || 0).toLocaleString() + '</strong></td>' +
+          '<td><button class="btn-invoice" data-invoice="' + q.estimateId + '">Ready for Invoice</button></td>' +
+          '</tr>';
+      }
+      tableHtml += '</tbody></table></div>';
+
+      // Mobile cards
+      let mobileHtml = '<div class="mobile-cards">';
+      for (const q of list) {
+        mobileHtml += '<div class="mobile-card">' +
+          '<div class="mobile-card-header">' +
+            '<div><strong>' + q.estimateNumber + '</strong> <span class="live-status ' + q.status + '">' + q.status + '</span></div>' +
+            '<strong>&pound;' + (q.total || 0).toLocaleString() + '</strong>' +
+          '</div>' +
+          '<div class="mobile-card-site">' + (q.customer || '') + '</div>' +
+          '<div class="mobile-card-scope">' + (q.project || '') + (q.reference ? ' &mdash; ' + q.reference : '') + '</div>' +
+          '<div style="margin-top:8px;"><button class="btn-invoice" data-invoice="' + q.estimateId + '" style="width:100%;">Ready for Invoice</button></div>' +
+        '</div>';
+      }
+      mobileHtml += '</div>';
+
+      document.getElementById('liveContent').innerHTML = tableHtml + mobileHtml;
+    }
+
+    async function markInvoiceReady(estimateId, btn) {
+      if (!confirm('Mark this quote as ready for invoice?')) return;
+      btn.disabled = true;
+      btn.textContent = 'Updating...';
+
+      try {
+        const res = await fetch('/api/live-quotes/' + estimateId + '/invoice-ready', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        btn.textContent = 'Done';
+        btn.classList.add('done');
+        // Remove from list after short delay
+        setTimeout(() => {
+          allLiveQuotes = allLiveQuotes.filter(q => q.estimateId !== estimateId);
+          document.getElementById('liveCount').textContent = allLiveQuotes.length;
+          renderLiveStats();
+          renderLiveTable(getFilteredLiveQuotes());
+        }, 1000);
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Ready for Invoice';
+        alert('Error: ' + err.message);
+      }
+    }
+
+    // Live quotes event delegation
+    document.getElementById('liveContent').addEventListener('click', function(e) {
+      const invoiceBtn = e.target.closest('[data-invoice]');
+      if (invoiceBtn) markInvoiceReady(invoiceBtn.dataset.invoice, invoiceBtn);
     });
 
     loadQuotes();
