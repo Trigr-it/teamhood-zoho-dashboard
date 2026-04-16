@@ -147,6 +147,41 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .detail-row.open { display: table-row; }
     .detail-cell { background: #0d1117; padding: 16px !important; font-size: 12px; color: #8b949e; }
     .load-time { font-size: 12px; color: #484f58; margin-left: 12px; }
+
+    /* Mobile card layout */
+    .mobile-cards { display: none; }
+    .mobile-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; margin-bottom: 10px; }
+    .mobile-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+    .mobile-card-id { color: #58a6ff; font-weight: 700; font-size: 13px; }
+    .mobile-card-client { font-size: 12px; color: #8b949e; }
+    .mobile-card-site { font-size: 14px; font-weight: 600; color: #e1e4e8; margin-bottom: 4px; }
+    .mobile-card-scope { font-size: 12px; color: #c9d1d9; margin-bottom: 8px; }
+    .mobile-card-pricing { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding: 8px; background: #0d1117; border-radius: 6px; }
+    .mobile-card-suggested { text-align: left; }
+    .mobile-card-suggested .rate { font-size: 16px; }
+    .mobile-card-match { text-align: right; font-size: 11px; color: #8b949e; }
+    .mobile-card-actions { display: flex; gap: 8px; align-items: center; }
+    .mobile-card-actions .hours-input { flex: 0 0 60px; }
+    .mobile-card-actions .rate-value { flex: 0 0 60px; text-align: right; }
+    .mobile-card-actions .btn-approve { flex: 1; }
+    .mobile-card-detail { margin-top: 8px; padding-top: 8px; border-top: 1px solid #21262d; font-size: 11px; color: #8b949e; display: none; }
+    .mobile-card-detail.open { display: block; }
+    .mobile-card-tags { margin: 6px 0; }
+    .mobile-card-assignee { color: #d2a8ff; font-size: 12px; }
+    .mobile-card-expand { color: #58a6ff; font-size: 12px; cursor: pointer; display: inline-block; margin-top: 6px; }
+
+    @media (max-width: 900px) {
+      body { padding: 12px; }
+      h1 { font-size: 18px; }
+      .stats { gap: 8px; }
+      .stat { padding: 10px 14px; min-width: 80px; }
+      .stat-value { font-size: 20px; }
+      .filters input { width: 100%; }
+      .filters { flex-direction: column; gap: 8px; }
+      .filters select { width: 100%; }
+      .desktop-table { display: none; }
+      .mobile-cards { display: block; }
+    }
   </style>
 </head>
 <body>
@@ -261,7 +296,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     async function approveQuote(id, btn) {
       const q = allQuotes.find(q => q.id === id);
       if (!q) return;
-      const hoursInput = document.getElementById('hours-' + id);
+      const hoursInput = document.getElementById('hours-' + id) || document.getElementById('m-hours-' + id);
       const hours = parseFloat(hoursInput?.value) || 0;
       if (hours <= 0) { alert('Please enter hours before approving.'); return; }
       const rate = hours * 85;
@@ -295,17 +330,14 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 
     function renderTable(quotes) {
       const list = quotes || allQuotes;
-      let html = '<table><thead><tr>' +
-        '<th></th><th>Card</th><th>Client</th><th>Site</th><th>Scope</th><th>Assignee</th>' +
-        '<th>Keywords</th><th>Suggested</th><th>Top Match</th><th>Hours</th><th>Value</th><th></th>' +
-        '</tr></thead><tbody>';
 
-      for (const q of list) {
+      // --- Shared data prep per card ---
+      function cardData(q) {
         const rate = q.suggestedRate;
         const rateDisplay = rate ? '&pound;' + (rate.weighted || rate.median) : '-';
         const rangeDisplay = rate ? '&pound;' + rate.min + ' - &pound;' + rate.max : '';
         const match = q.topMatch;
-        const matchDisplay = match ? match.estimateNumber + '<br>&pound;' + match.total : '-';
+        const matchDisplay = match ? match.estimateNumber + ' &pound;' + match.total : '-';
         const matchScoreDisplay = match ? '<span class="match-score">' + match.matchScore + '</span>' : '';
         const kwDisplay = (q.matchedKeywords || []).map(k => '<span class="tag">' + k + '</span>').join(' ');
         const clientDisplay = q.zohoCustomerName
@@ -313,52 +345,86 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           : '<span class="client-code">' + (q.clientCode || '?') + '</span> <span class="unmapped">unmapped</span>';
         const defaultRate = rate?.weighted || rate?.median || 0;
         const defaultHours = defaultRate > 0 ? (defaultRate / 85).toFixed(1) : '0';
-        const hoursDisplay = rate?.hours ? rate.hours + 'hrs' : '';
-        const suggestedLine = rate ? rateDisplay : '-';
         const hoursLine = rate?.hours ? '<span style="color:#d29922;font-size:12px;">' + rate.hours + ' hrs</span>' : '';
+        return { rate, rateDisplay, rangeDisplay, match, matchDisplay, matchScoreDisplay, kwDisplay, clientDisplay, defaultRate, defaultHours, hoursLine };
+      }
 
-        html += '<tr class="quote-row" data-id="' + q.id + '">' +
+      function detailHtml(q) {
+        let html = '<strong>Custom Fields:</strong> ' + (q.customFields || []).filter(f => f.value).map(f => f.name + ': ' + f.value).join(' | ');
+        if (q.suggestedRate?.hours) {
+          html += '<br><strong>Estimated Hours:</strong> ' + q.suggestedRate.hours + 'hrs @ &pound;85/hr';
+        }
+        if (q.similarQuotes && q.similarQuotes.length > 0) {
+          html += '<br><br><strong>Reference Quotes:</strong>';
+          for (const sq of q.similarQuotes) {
+            const clientTag = sq.isClientMatch ? ' <span style="color:#58a6ff;">(same client)</span>' : '';
+            html += '<div style="padding:4px 0;border-bottom:1px solid #21262d;' + (sq.isClientMatch ? 'background:#1c2128;padding:4px;border-radius:4px;margin:2px 0;' : '') + '">' +
+              '<strong>' + sq.estimateNumber + '</strong> ' + (sq.client || '') + clientTag +
+              '<br>' + (sq.reference || '') +
+              ' &mdash; <strong>&pound;' + sq.total + '</strong> <span class="match-score">' + sq.matchScore + '</span> <span style="color:#484f58;">' + (sq.date || '') + '</span></div>';
+          }
+        }
+        return html;
+      }
+
+      // --- Desktop table ---
+      let tableHtml = '<div class="desktop-table"><table><thead><tr>' +
+        '<th></th><th>Card</th><th>Client</th><th>Site</th><th>Scope</th><th>Assignee</th>' +
+        '<th>Keywords</th><th>Suggested</th><th>Top Match</th><th>Hours</th><th>Value</th><th></th>' +
+        '</tr></thead><tbody>';
+
+      for (const q of list) {
+        const d = cardData(q);
+        tableHtml += '<tr class="quote-row" data-id="' + q.id + '">' +
           '<td><span class="expand-btn" data-toggle="' + q.id + '">+</span></td>' +
           '<td><a href="' + (q.url || '#') + '" target="_blank">' + (q.displayId || '') + '</a></td>' +
-          '<td>' + clientDisplay + '</td>' +
+          '<td>' + d.clientDisplay + '</td>' +
           '<td>' + (q.siteName || '-') + '</td>' +
           '<td class="scope">' + (q.scope || '-') + '</td>' +
           '<td class="assignee">' + (q.assignedUserName || '-') + '</td>' +
-          '<td class="kw-col">' + kwDisplay + '</td>' +
-          '<td><span class="rate">' + suggestedLine + '</span><br>' + hoursLine + '<br><span class="rate-range">' + rangeDisplay + '</span></td>' +
-          '<td class="match">' + matchDisplay + '<br>' + matchScoreDisplay + '</td>' +
-          '<td><input type="number" class="hours-input" id="hours-' + q.id + '" value="' + defaultHours + '" min="0" step="0.5" style="width:60px"> <span class="rate-value" id="value-' + q.id + '">&pound;' + defaultRate + '</span></td>' +
+          '<td class="kw-col">' + d.kwDisplay + '</td>' +
+          '<td><span class="rate">' + d.rateDisplay + '</span><br>' + d.hoursLine + '<br><span class="rate-range">' + d.rangeDisplay + '</span></td>' +
+          '<td class="match">' + d.matchDisplay + '<br>' + d.matchScoreDisplay + '</td>' +
+          '<td><input type="number" class="hours-input" id="hours-' + q.id + '" value="' + d.defaultHours + '" min="0" step="0.5" style="width:60px"> <span class="rate-value" id="value-' + q.id + '">&pound;' + d.defaultRate + '</span></td>' +
           '<td></td>' +
           '<td><button class="btn-approve" data-approve="' + q.id + '">Approve</button></td>' +
           '</tr>';
-
-        let detailHtml = '<strong>Custom Fields:</strong> ' + (q.customFields || []).filter(f => f.value).map(f => f.name + ': ' + f.value).join(' | ');
-        if (q.suggestedRate?.hours) {
-          detailHtml += '<br><strong>Estimated Hours:</strong> ' + q.suggestedRate.hours + 'hrs @ &pound;85/hr';
-        }
-        if (q.similarQuotes && q.similarQuotes.length > 0) {
-          detailHtml += '<br><br><strong>Reference Quotes Used:</strong>';
-          detailHtml += '<table style="margin-top:8px;width:100%;font-size:12px;border-collapse:collapse;">';
-          detailHtml += '<tr style="border-bottom:1px solid #30363d;"><th style="text-align:left;padding:4px 8px;color:#8b949e;">Quote</th><th style="text-align:left;padding:4px 8px;color:#8b949e;">Client</th><th style="text-align:left;padding:4px 8px;color:#8b949e;">Reference</th><th style="text-align:right;padding:4px 8px;color:#8b949e;">Total</th><th style="text-align:right;padding:4px 8px;color:#8b949e;">Match</th><th style="text-align:left;padding:4px 8px;color:#8b949e;">Date</th></tr>';
-          for (const sq of q.similarQuotes) {
-            const clientTag = sq.isClientMatch ? ' <span style="color:#58a6ff;font-size:10px;">(same client)</span>' : '';
-            const rowBg = sq.isClientMatch ? 'background:#1c2128;' : '';
-            detailHtml += '<tr style="border-bottom:1px solid #21262d;' + rowBg + '">' +
-              '<td style="padding:4px 8px;">' + sq.estimateNumber + '</td>' +
-              '<td style="padding:4px 8px;">' + (sq.client || '') + clientTag + '</td>' +
-              '<td style="padding:4px 8px;">' + (sq.reference || '') + '</td>' +
-              '<td style="padding:4px 8px;text-align:right;">&pound;' + sq.total + '</td>' +
-              '<td style="padding:4px 8px;text-align:right;color:#3fb950;">' + sq.matchScore + '</td>' +
-              '<td style="padding:4px 8px;">' + (sq.date || '') + '</td>' +
-              '</tr>';
-          }
-          detailHtml += '</table>';
-        }
-        html += '<tr class="detail-row" data-id="' + q.id + '" style="display:none"><td colspan="13" class="detail-cell">' + detailHtml + '</td></tr>';
+        tableHtml += '<tr class="detail-row" data-id="' + q.id + '" style="display:none"><td colspan="13" class="detail-cell">' + detailHtml(q) + '</td></tr>';
       }
+      tableHtml += '</tbody></table></div>';
 
-      html += '</tbody></table>';
-      document.getElementById('content').innerHTML = html;
+      // --- Mobile cards ---
+      let mobileHtml = '<div class="mobile-cards">';
+      for (const q of list) {
+        const d = cardData(q);
+        mobileHtml += '<div class="mobile-card" data-id="' + q.id + '">' +
+          '<div class="mobile-card-header">' +
+            '<div><span class="mobile-card-id"><a href="' + (q.url || '#') + '" target="_blank">' + (q.displayId || '') + '</a></span> ' +
+            '<span class="mobile-card-client">' + d.clientDisplay + '</span></div>' +
+            '<span class="mobile-card-assignee">' + (q.assignedUserName || '') + '</span>' +
+          '</div>' +
+          '<div class="mobile-card-site">' + (q.siteName || '-') + '</div>' +
+          '<div class="mobile-card-scope">' + (q.scope || '-') + '</div>' +
+          '<div class="mobile-card-pricing">' +
+            '<div class="mobile-card-suggested">' +
+              '<span class="rate">' + d.rateDisplay + '</span><br>' + d.hoursLine +
+              '<br><span class="rate-range">' + d.rangeDisplay + '</span>' +
+            '</div>' +
+            '<div class="mobile-card-match">Top: ' + d.matchDisplay + '<br>' + d.matchScoreDisplay + '</div>' +
+          '</div>' +
+          '<div class="mobile-card-tags">' + d.kwDisplay + '</div>' +
+          '<div class="mobile-card-actions">' +
+            '<input type="number" class="hours-input" id="m-hours-' + q.id + '" value="' + d.defaultHours + '" min="0" step="0.5">' +
+            '<span class="rate-value" id="m-value-' + q.id + '">&pound;' + d.defaultRate + '</span>' +
+            '<button class="btn-approve" data-approve="' + q.id + '">Approve</button>' +
+          '</div>' +
+          '<span class="mobile-card-expand" data-toggle="' + q.id + '">Show details</span>' +
+          '<div class="mobile-card-detail" data-detail="' + q.id + '">' + detailHtml(q) + '</div>' +
+        '</div>';
+      }
+      mobileHtml += '</div>';
+
+      document.getElementById('content').innerHTML = tableHtml + mobileHtml;
     }
 
     // Event delegation — attached once, handles all clicks
@@ -370,19 +436,36 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       }
       const toggleBtn = e.target.closest('[data-toggle]');
       if (toggleBtn) {
-        toggleDetail(toggleBtn.dataset.toggle);
+        const id = toggleBtn.dataset.toggle;
+        // Desktop: toggle detail row
+        toggleDetail(id);
+        // Mobile: toggle detail div
+        const mobileDetail = document.querySelector('.mobile-card-detail[data-detail="' + id + '"]');
+        if (mobileDetail) {
+          mobileDetail.classList.toggle('open');
+          toggleBtn.textContent = mobileDetail.classList.contains('open') ? 'Hide details' : 'Show details';
+        }
         return;
       }
     });
 
-    // Update value display when hours input changes
+    // Update value display when hours input changes (desktop + mobile)
     document.getElementById('content').addEventListener('input', function(e) {
       if (e.target.classList.contains('hours-input')) {
-        const id = e.target.id.replace('hours-', '');
+        const id = e.target.id.replace('hours-', '').replace('m-hours-', '');
         const hours = parseFloat(e.target.value) || 0;
         const value = hours * 85;
+        // Update both desktop and mobile value displays
         const valueEl = document.getElementById('value-' + id);
-        if (valueEl) valueEl.textContent = String.fromCharCode(163) + value.toFixed(0);
+        const mValueEl = document.getElementById('m-value-' + id);
+        const text = String.fromCharCode(163) + value.toFixed(0);
+        if (valueEl) valueEl.textContent = text;
+        if (mValueEl) mValueEl.textContent = text;
+        // Sync hours between desktop and mobile inputs
+        const desktopInput = document.getElementById('hours-' + id);
+        const mobileInput = document.getElementById('m-hours-' + id);
+        if (e.target !== desktopInput && desktopInput) desktopInput.value = e.target.value;
+        if (e.target !== mobileInput && mobileInput) mobileInput.value = e.target.value;
       }
     });
 
