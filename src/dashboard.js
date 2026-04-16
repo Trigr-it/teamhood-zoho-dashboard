@@ -624,14 +624,14 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const total = allLiveQuotes.length;
       const sent = allLiveQuotes.filter(q => q.status === 'sent').length;
       const accepted = allLiveQuotes.filter(q => q.status === 'accepted').length;
-      const totalValue = allLiveQuotes.reduce((sum, q) => sum + (q.total || 0), 0);
+      const subTotalValue = allLiveQuotes.reduce((sum, q) => sum + (q.subTotal || 0), 0);
       const clients = new Set(allLiveQuotes.map(q => q.customer)).size;
 
       document.getElementById('liveStats').innerHTML =
         '<div class="stat"><div class="stat-value">' + total + '</div><div class="stat-label">Live Quotes</div></div>' +
         '<div class="stat"><div class="stat-value">' + sent + '</div><div class="stat-label">Sent</div></div>' +
         '<div class="stat"><div class="stat-value">' + accepted + '</div><div class="stat-label">Accepted</div></div>' +
-        '<div class="stat"><div class="stat-value">&pound;' + totalValue.toLocaleString() + '</div><div class="stat-label">Total Value</div></div>' +
+        '<div class="stat"><div class="stat-value">&pound;' + subTotalValue.toLocaleString() + '</div><div class="stat-label">Sub Total Value</div></div>' +
         '<div class="stat"><div class="stat-value">' + clients + '</div><div class="stat-label">Clients</div></div>';
     }
 
