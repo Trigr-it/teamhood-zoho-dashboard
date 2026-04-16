@@ -12,9 +12,35 @@ const app = express();
 app.use(express.json());
 
 // ---------------------------------------------------------------------------
-// Dashboard routes at /
+// Basic auth for dashboard (not MCP endpoints)
 // ---------------------------------------------------------------------------
 
+const DASH_PASSWORD = process.env.DASH_PASSWORD || 'nodegroup';
+
+function requireAuth(req, res, next) {
+  const auth = req.headers.authorization;
+  if (auth) {
+    const [scheme, encoded] = auth.split(' ');
+    if (scheme === 'Basic') {
+      const [user, pass] = Buffer.from(encoded, 'base64').toString().split(':');
+      if (pass === DASH_PASSWORD) return next();
+    }
+  }
+  res.set('WWW-Authenticate', 'Basic realm="Node Quote Dashboard"');
+  res.status(401).send('Authentication required');
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard routes at / (password protected)
+// ---------------------------------------------------------------------------
+
+app.use('/', (req, res, next) => {
+  // Skip auth for MCP endpoints and health check
+  if (req.path === '/health' || req.path === '/sse' || req.path === '/message' || req.path === '/mcp') {
+    return next();
+  }
+  requireAuth(req, res, next);
+});
 app.use(createDashboardRouter());
 
 // ---------------------------------------------------------------------------
