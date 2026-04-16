@@ -127,6 +127,9 @@ export function findSimilarQuotes(title, scope, clientName, limit = 5) {
 
   for (const quote of db) {
     if (quote.status === 'declined' || quote.status === 'expired') continue;
+    // Skip EDC (Engineer Design Confirmation) quotes — low-value checks that skew pricing
+    const hasEDC = quote.line_items.some(li => (li.name || '').includes('EDC') || (li.name || '').includes('Engineer Design Confirmation'));
+    if (hasEDC) continue;
     const isClient = clientLower && (quote.client || '').toLowerCase().includes(clientLower.split(' ')[0]);
     if (isClient) clientQuotes.push(quote);
     else otherQuotes.push(quote);
