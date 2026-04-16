@@ -1,0 +1,71 @@
+Node Group — Client Identifiers
+================================
+
+Code  Client
+----  ----------------------------------------
+3SC   3 Scaffolding
+ACS   Access Solutions Scaffolding
+AIN   Ainscaff Scaffolding
+ALL   Allied Access
+AMG   AMG Waterproofing
+ANT   Antvic LTD
+ARC   ARK Construction
+ARK   Ark Build PLC
+ART   Artel Scaffolding
+ATR   Atrium Access
+BFT   BFT Mastclimbing
+BHL   Builders Hoists Ltd
+BPA   Brogan Powered Access
+BRO   Brogan Group
+CDR   Clad Design Resource Ltd
+CLV   Cliveden Conservation
+COS   Commercial Stone
+CSL   CSL Scaffolding
+DIA   Diamond Scaffolding Ltd
+EXA   Extreme Abseiling Ltd
+EXC   Excalibur Scaffolding North East
+FWS   Fourways Plant
+GAB   GABE Ireland
+GCS   GCS Developments
+GPF   GPF Lewis
+HCS   High Class Scaffold
+HGC   HG Construction
+IIC   Interiors Inc
+ISG   ISG Scaffolding
+KEN   Kendall Scaffolding Ltd
+LAO   Laois Scaffolding IE
+LAW   Lawtech
+LOU   Loughlen Ltd
+MET   MET Systems
+MJS   MJ Scaffolding
+MKI   MK1 Indigo Group
+MOO   Mooreways Scaffolding
+MSL   Martin Scaffolding
+MWS   MW Scaffolding
+NAS   NAS Scaffolding
+NCT   Neilcott Construction
+NGF   Next Gen Facades
+NGS   NxtGen Scaffolding
+NKS   NK Scaffolding
+NOD   Node Scaffold Design Ltd
+PLS   Park Lane Scaffolding
+PRO   Proplant Scaffolding
+RIS   Rise Scaffolding
+ROC   Rochester Scaffolding
+RPD   Rapid Hoists
+RSC   RSC Scaffolding
+SCK   SCK Group LTD
+SBC   Southbank Centre
+SDS   Sean Doyle Scaffolding
+SGS   SG Scaffolding
+SHA   Shamrock Access
+STA   Statom Group
+SWI   Swift Scaffolding
+TGS   TG Scaffolding
+UNI   Unison Scaffolding
+UPS   UP Scaffolding
+VAB   Vabel Limited
+VUL   Vulcan Scaffolding
+W1C   West 1 Contractors
+XLS   XL Scaffolding Ltd
+---   Brogan Group (Old)

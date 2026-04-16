@@ -1,0 +1,20 @@
+{
+  "name": "node-quote-system",
+  "version": "1.0.0",
+  "description": "Combined Teamhood + Zoho MCP server with quote approval dashboard",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "sync-quotes": "node scripts/sync-quotes.js",
+    "discover-ids": "node scripts/discover-ids.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^4.21.2",
+    "zod": "^3.24.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

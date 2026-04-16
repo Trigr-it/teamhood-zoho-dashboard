@@ -1,0 +1,392 @@
+import { Router } from 'express';
+import * as api from './teamhood/api.js';
+import { parseCardTitle } from './utils/title-parser.js';
+import { lookupClient } from './utils/client-lookup.js';
+import { findSimilarQuotes } from './utils/quote-matcher.js';
+import { approveCard } from './approve.js';
+
+const EXCLUDED_CLIENT_CODES = new Set(['BFT']);
+
+export function createDashboardRouter() {
+  const router = Router();
+
+  // --- API: List price-required cards with pricing ---
+  router.get('/api/cards', async (_req, res) => {
+    try {
+      const cards = await api.listCards({
+        parent_only: true,
+        serverTag: 'Price Required',
+        archived: false,
+      });
+
+      const result = cards
+        .filter(card => {
+          const parsed = parseCardTitle(card.title);
+          return !(parsed.clientCode && EXCLUDED_CLIENT_CODES.has(parsed.clientCode));
+        })
+        .map(card => {
+          const parsed = parseCardTitle(card.title);
+          const client = lookupClient(parsed.clientCode);
+          const pricing = findSimilarQuotes(card.title, parsed.scope, client?.customerName, 5);
+          return {
+            id: card.id,
+            displayId: card.displayId,
+            title: card.title,
+            clientCode: parsed.clientCode,
+            zohoCustomerName: client ? client.customerName : null,
+            siteName: parsed.siteName,
+            scope: parsed.scope,
+            assignedUserName: card.assignedUserName,
+            suggestedRate: pricing.suggestedRate,
+            matchedKeywords: pricing.keywords,
+            topMatch: pricing.similarQuotes[0] ? {
+              estimateNumber: pricing.similarQuotes[0].estimateNumber,
+              reference: pricing.similarQuotes[0].reference,
+              total: pricing.similarQuotes[0].total,
+              matchScore: pricing.similarQuotes[0].matchScore,
+            } : null,
+            similarQuotes: pricing.similarQuotes.map(sq => ({
+              estimateNumber: sq.estimateNumber,
+              client: sq.client,
+              reference: sq.reference,
+              total: sq.total,
+              matchScore: sq.matchScore,
+              isClientMatch: sq.isClientMatch,
+              date: sq.date,
+            })),
+            customFields: card.customFields,
+            url: card.url,
+          };
+        });
+
+      res.json({ success: true, quotes: result });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- API: Approve a card → create Zoho estimate ---
+  router.post('/api/cards/:cardId/approve', async (req, res) => {
+    try {
+      const { rate, quantity, lineItemName, lineItemDescription } = req.body;
+      const result = await approveCard(req.params.cardId, {
+        rate: parseFloat(rate) || 0,
+        quantity: parseInt(quantity) || 1,
+        lineItemName,
+        lineItemDescription,
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- Dashboard UI ---
+  router.get('/', (_req, res) => {
+    res.send(DASHBOARD_HTML);
+  });
+
+  return router;
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard HTML
+// ---------------------------------------------------------------------------
+
+const DASHBOARD_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Node Group - Quote Dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1117; color: #e1e4e8; padding: 20px; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    h1 { font-size: 24px; color: #fff; }
+    .subtitle { color: #8b949e; font-size: 14px; margin-top: 4px; }
+    .btn-refresh { background: #1f6feb; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; }
+    .btn-refresh:hover { background: #388bfd; }
+    .btn-refresh:disabled { background: #21262d; color: #484f58; cursor: wait; }
+    .stats { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+    .stat { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px 20px; min-width: 140px; }
+    .stat-value { font-size: 28px; font-weight: 700; color: #58a6ff; }
+    .stat-label { font-size: 12px; color: #8b949e; margin-top: 4px; }
+    .filters { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
+    .filters input, .filters select { background: #161b22; border: 1px solid #30363d; color: #e1e4e8; padding: 8px 12px; border-radius: 6px; font-size: 14px; }
+    .filters input { width: 250px; }
+    table { width: 100%; border-collapse: collapse; background: #161b22; border-radius: 8px; overflow: hidden; }
+    thead { background: #1c2128; }
+    th { text-align: left; padding: 12px 16px; font-size: 12px; font-weight: 600; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #30363d; }
+    td { padding: 12px 16px; border-bottom: 1px solid #21262d; font-size: 13px; vertical-align: top; }
+    tr:hover { background: #1c2128; }
+    .client-code { font-weight: 700; color: #58a6ff; }
+    .scope { color: #c9d1d9; max-width: 300px; }
+    .rate { font-weight: 700; font-size: 15px; }
+    .rate-range { font-size: 11px; color: #8b949e; }
+    .match { font-size: 11px; color: #8b949e; }
+    .match-score { color: #3fb950; font-weight: 600; }
+    .assignee { color: #d2a8ff; font-size: 12px; }
+    .unmapped { color: #f85149; font-size: 11px; }
+    .tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; background: #1f3a2e; color: #3fb950; margin: 1px; }
+    .kw-col { max-width: 120px; }
+    .btn-approve { background: #238636; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.2s; }
+    .btn-approve:hover { background: #2ea043; }
+    .btn-approve:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+    .btn-approve.approved { background: #1f6feb; cursor: default; }
+    .hours-input { background: #0d1117; border: 1px solid #30363d; color: #e1e4e8; padding: 4px 8px; border-radius: 4px; width: 60px; font-size: 14px; text-align: right; }
+    .rate-value { font-weight: 700; color: #3fb950; font-size: 13px; margin-left: 4px; }
+    .loading { text-align: center; padding: 60px; color: #8b949e; font-size: 16px; }
+    .error { background: #3d1117; border: 1px solid #f85149; color: #f85149; padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; }
+    .success-msg { font-size: 11px; color: #3fb950; margin-top: 4px; }
+    .error-msg { font-size: 11px; color: #f85149; margin-top: 4px; }
+    a { color: #58a6ff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .expand-btn { cursor: pointer; color: #58a6ff; font-size: 12px; }
+    .detail-row { display: none; }
+    .detail-row.open { display: table-row; }
+    .detail-cell { background: #0d1117; padding: 16px !important; font-size: 12px; color: #8b949e; }
+    .load-time { font-size: 12px; color: #484f58; margin-left: 12px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <h1>Node Group - Quote Dashboard</h1>
+      <p class="subtitle">Teamhood "Price Required" cards &rarr; Zoho draft estimates</p>
+    </div>
+    <div>
+      <span class="load-time" id="loadTime"></span>
+      <button class="btn-refresh" id="refreshBtn" onclick="loadQuotes()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="filters">
+    <input type="text" id="search" placeholder="Search cards..." oninput="filterTable()">
+    <select id="clientFilter" onchange="filterTable()"><option value="">All clients</option></select>
+    <select id="assigneeFilter" onchange="filterTable()"><option value="">All assignees</option></select>
+  </div>
+
+  <div id="error"></div>
+  <div id="content"><div class="loading">Loading quotes from Teamhood...</div></div>
+
+  <script>
+    let allQuotes = [];
+
+    async function loadQuotes() {
+      const btn = document.getElementById('refreshBtn');
+      btn.disabled = true;
+      btn.textContent = 'Loading...';
+      document.getElementById('error').innerHTML = '';
+      const start = Date.now();
+
+      try {
+        const res = await fetch('/api/cards');
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        allQuotes = data.quotes;
+        const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+        document.getElementById('loadTime').textContent = 'Loaded in ' + elapsed + 's';
+        renderStats();
+        populateFilters();
+        renderTable();
+      } catch (err) {
+        document.getElementById('error').innerHTML = '<div class="error">' + err.message + '</div>';
+        document.getElementById('content').innerHTML = '';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Refresh';
+      }
+    }
+
+    function renderStats() {
+      const total = allQuotes.length;
+      const withPrice = allQuotes.filter(q => q.suggestedRate).length;
+      const unmapped = allQuotes.filter(q => !q.zohoCustomerName).length;
+      const clients = new Set(allQuotes.map(q => q.zohoCustomerName || q.clientCode)).size;
+      const totalValue = allQuotes.reduce((sum, q) => sum + (q.suggestedRate?.median || 0), 0);
+
+      document.getElementById('stats').innerHTML =
+        '<div class="stat"><div class="stat-value">' + total + '</div><div class="stat-label">Cards to Quote</div></div>' +
+        '<div class="stat"><div class="stat-value">' + withPrice + '</div><div class="stat-label">With Pricing</div></div>' +
+        '<div class="stat"><div class="stat-value">' + clients + '</div><div class="stat-label">Clients</div></div>' +
+        '<div class="stat"><div class="stat-value">&pound;' + totalValue.toLocaleString() + '</div><div class="stat-label">Est. Total Value</div></div>' +
+        (unmapped > 0 ? '<div class="stat"><div class="stat-value" style="color:#f85149">' + unmapped + '</div><div class="stat-label">Unmapped Clients</div></div>' : '');
+    }
+
+    function populateFilters() {
+      const clients = [...new Set(allQuotes.map(q => q.zohoCustomerName || q.clientCode).filter(Boolean))].sort();
+      const assignees = [...new Set(allQuotes.map(q => q.assignedUserName).filter(Boolean))].sort();
+
+      const cf = document.getElementById('clientFilter');
+      const af = document.getElementById('assigneeFilter');
+      cf.innerHTML = '<option value="">All clients</option>';
+      af.innerHTML = '<option value="">All assignees</option>';
+      clients.forEach(c => { const o = document.createElement('option'); o.value = c; o.text = c; cf.add(o); });
+      assignees.forEach(a => { const o = document.createElement('option'); o.value = a; o.text = a; af.add(o); });
+    }
+
+    function getFilteredQuotes() {
+      const search = document.getElementById('search').value.toLowerCase();
+      const client = document.getElementById('clientFilter').value;
+      const assignee = document.getElementById('assigneeFilter').value;
+      let filtered = allQuotes.filter(q => {
+        const text = (q.title + ' ' + q.scope + ' ' + q.displayId + ' ' + (q.zohoCustomerName || '') + ' ' + (q.siteName || '')).toLowerCase();
+        const matchSearch = !search || text.includes(search);
+        const matchClient = !client || (q.zohoCustomerName || q.clientCode) === client;
+        const matchAssignee = !assignee || q.assignedUserName === assignee;
+        return matchSearch && matchClient && matchAssignee;
+      });
+      // Sort by site name when filtered by client, so projects group together
+      if (client) {
+        filtered.sort((a, b) => (a.siteName || '').localeCompare(b.siteName || ''));
+      }
+      return filtered;
+    }
+
+    function filterTable() {
+      renderTable(getFilteredQuotes());
+    }
+
+    function toggleDetail(id) {
+      const row = document.querySelector('.detail-row[data-id="' + id + '"]');
+      if (row) {
+        row.classList.toggle('open');
+        row.style.display = row.classList.contains('open') ? '' : 'none';
+      }
+    }
+
+    async function approveQuote(id, btn) {
+      const q = allQuotes.find(q => q.id === id);
+      if (!q) return;
+      const hoursInput = document.getElementById('hours-' + id);
+      const hours = parseFloat(hoursInput?.value) || 0;
+      if (hours <= 0) { alert('Please enter hours before approving.'); return; }
+      const rate = hours * 85;
+      if (!q.zohoCustomerName) { alert('Cannot approve: client code "' + q.clientCode + '" is not mapped in client-identifiers.txt'); return; }
+      if (!confirm('Create Zoho draft estimate for ' + q.displayId + ' (' + q.zohoCustomerName + ') at ' + hours + 'hrs = ' + String.fromCharCode(163) + rate + '?')) return;
+
+      btn.disabled = true;
+      btn.textContent = 'Creating...';
+      const msgEl = document.createElement('div');
+      btn.parentElement.appendChild(msgEl);
+
+      try {
+        const res = await fetch('/api/cards/' + id + '/approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rate, quantity: 1 }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        btn.textContent = 'Approved';
+        btn.classList.add('approved');
+        msgEl.className = 'success-msg';
+        msgEl.textContent = data.estimateNumber + ' created' + (data.tagRemoved ? ' (tag removed)' : '');
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Approve';
+        msgEl.className = 'error-msg';
+        msgEl.textContent = err.message;
+      }
+    }
+
+    function renderTable(quotes) {
+      const list = quotes || allQuotes;
+      let html = '<table><thead><tr>' +
+        '<th></th><th>Card</th><th>Client</th><th>Site</th><th>Scope</th><th>Assignee</th>' +
+        '<th>Keywords</th><th>Suggested</th><th>Top Match</th><th>Hours</th><th>Value</th><th></th>' +
+        '</tr></thead><tbody>';
+
+      for (const q of list) {
+        const rate = q.suggestedRate;
+        const rateDisplay = rate ? '&pound;' + (rate.weighted || rate.median) : '-';
+        const rangeDisplay = rate ? '&pound;' + rate.min + ' - &pound;' + rate.max : '';
+        const match = q.topMatch;
+        const matchDisplay = match ? match.estimateNumber + '<br>&pound;' + match.total : '-';
+        const matchScoreDisplay = match ? '<span class="match-score">' + match.matchScore + '</span>' : '';
+        const kwDisplay = (q.matchedKeywords || []).map(k => '<span class="tag">' + k + '</span>').join(' ');
+        const clientDisplay = q.zohoCustomerName
+          ? '<span class="client-code">' + q.clientCode + '</span> ' + q.zohoCustomerName
+          : '<span class="client-code">' + (q.clientCode || '?') + '</span> <span class="unmapped">unmapped</span>';
+        const defaultRate = rate?.weighted || rate?.median || 0;
+        const defaultHours = defaultRate > 0 ? (defaultRate / 85).toFixed(1) : '0';
+        const hoursDisplay = rate?.hours ? rate.hours + 'hrs' : '';
+        const suggestedLine = rate ? rateDisplay : '-';
+        const hoursLine = rate?.hours ? '<span style="color:#d29922;font-size:12px;">' + rate.hours + ' hrs</span>' : '';
+
+        html += '<tr class="quote-row" data-id="' + q.id + '">' +
+          '<td><span class="expand-btn" data-toggle="' + q.id + '">+</span></td>' +
+          '<td><a href="' + (q.url || '#') + '" target="_blank">' + (q.displayId || '') + '</a></td>' +
+          '<td>' + clientDisplay + '</td>' +
+          '<td>' + (q.siteName || '-') + '</td>' +
+          '<td class="scope">' + (q.scope || '-') + '</td>' +
+          '<td class="assignee">' + (q.assignedUserName || '-') + '</td>' +
+          '<td class="kw-col">' + kwDisplay + '</td>' +
+          '<td><span class="rate">' + suggestedLine + '</span><br>' + hoursLine + '<br><span class="rate-range">' + rangeDisplay + '</span></td>' +
+          '<td class="match">' + matchDisplay + '<br>' + matchScoreDisplay + '</td>' +
+          '<td><input type="number" class="hours-input" id="hours-' + q.id + '" value="' + defaultHours + '" min="0" step="0.5" style="width:60px"> <span class="rate-value" id="value-' + q.id + '">&pound;' + defaultRate + '</span></td>' +
+          '<td></td>' +
+          '<td><button class="btn-approve" data-approve="' + q.id + '">Approve</button></td>' +
+          '</tr>';
+
+        let detailHtml = '<strong>Custom Fields:</strong> ' + (q.customFields || []).filter(f => f.value).map(f => f.name + ': ' + f.value).join(' | ');
+        if (q.suggestedRate?.hours) {
+          detailHtml += '<br><strong>Estimated Hours:</strong> ' + q.suggestedRate.hours + 'hrs @ &pound;85/hr';
+        }
+        if (q.similarQuotes && q.similarQuotes.length > 0) {
+          detailHtml += '<br><br><strong>Reference Quotes Used:</strong>';
+          detailHtml += '<table style="margin-top:8px;width:100%;font-size:12px;border-collapse:collapse;">';
+          detailHtml += '<tr style="border-bottom:1px solid #30363d;"><th style="text-align:left;padding:4px 8px;color:#8b949e;">Quote</th><th style="text-align:left;padding:4px 8px;color:#8b949e;">Client</th><th style="text-align:left;padding:4px 8px;color:#8b949e;">Reference</th><th style="text-align:right;padding:4px 8px;color:#8b949e;">Total</th><th style="text-align:right;padding:4px 8px;color:#8b949e;">Match</th><th style="text-align:left;padding:4px 8px;color:#8b949e;">Date</th></tr>';
+          for (const sq of q.similarQuotes) {
+            const clientTag = sq.isClientMatch ? ' <span style="color:#58a6ff;font-size:10px;">(same client)</span>' : '';
+            const rowBg = sq.isClientMatch ? 'background:#1c2128;' : '';
+            detailHtml += '<tr style="border-bottom:1px solid #21262d;' + rowBg + '">' +
+              '<td style="padding:4px 8px;">' + sq.estimateNumber + '</td>' +
+              '<td style="padding:4px 8px;">' + (sq.client || '') + clientTag + '</td>' +
+              '<td style="padding:4px 8px;">' + (sq.reference || '') + '</td>' +
+              '<td style="padding:4px 8px;text-align:right;">&pound;' + sq.total + '</td>' +
+              '<td style="padding:4px 8px;text-align:right;color:#3fb950;">' + sq.matchScore + '</td>' +
+              '<td style="padding:4px 8px;">' + (sq.date || '') + '</td>' +
+              '</tr>';
+          }
+          detailHtml += '</table>';
+        }
+        html += '<tr class="detail-row" data-id="' + q.id + '" style="display:none"><td colspan="13" class="detail-cell">' + detailHtml + '</td></tr>';
+      }
+
+      html += '</tbody></table>';
+      document.getElementById('content').innerHTML = html;
+    }
+
+    // Event delegation — attached once, handles all clicks
+    document.getElementById('content').addEventListener('click', function(e) {
+      const approveBtn = e.target.closest('[data-approve]');
+      if (approveBtn) {
+        approveQuote(approveBtn.dataset.approve, approveBtn);
+        return;
+      }
+      const toggleBtn = e.target.closest('[data-toggle]');
+      if (toggleBtn) {
+        toggleDetail(toggleBtn.dataset.toggle);
+        return;
+      }
+    });
+
+    // Update value display when hours input changes
+    document.getElementById('content').addEventListener('input', function(e) {
+      if (e.target.classList.contains('hours-input')) {
+        const id = e.target.id.replace('hours-', '');
+        const hours = parseFloat(e.target.value) || 0;
+        const value = hours * 85;
+        const valueEl = document.getElementById('value-' + id);
+        if (valueEl) valueEl.textContent = String.fromCharCode(163) + value.toFixed(0);
+      }
+    });
+
+    loadQuotes();
+  </script>
+</body>
+</html>`;
