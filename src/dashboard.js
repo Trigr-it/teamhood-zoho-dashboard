@@ -645,23 +645,26 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     function getFilteredLiveQuotes() {
       const search = document.getElementById('liveSearch').value.toLowerCase();
       const client = document.getElementById('liveClientFilter').value;
-      return allLiveQuotes.filter(q => {
+      let filtered = allLiveQuotes.filter(q => {
         const text = (q.estimateNumber + ' ' + q.customer + ' ' + q.project + ' ' + q.reference).toLowerCase();
         const matchSearch = !search || text.includes(search);
         const matchClient = !client || q.customer === client;
         return matchSearch && matchClient;
       });
+      // Always sort by date descending (most recent first)
+      filtered.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      return filtered;
     }
 
     function filterLiveTable() { renderLiveTable(getFilteredLiveQuotes()); }
 
     function renderLiveTable(quotes) {
-      const list = quotes || allLiveQuotes;
+      const list = quotes || [...allLiveQuotes].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
       // Desktop table
       let tableHtml = '<div class="desktop-table"><table><thead><tr>' +
         '<th>Quote</th><th>Date</th><th>Client</th><th>Project</th><th>Reference</th>' +
-        '<th>Status</th><th>Total</th><th></th>' +
+        '<th>Status</th><th>Sub Total</th><th>Total (inc. VAT)</th><th></th>' +
         '</tr></thead><tbody>';
 
       for (const q of list) {
@@ -672,7 +675,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           '<td>' + (q.project || '') + '</td>' +
           '<td>' + (q.reference || '') + '</td>' +
           '<td><span class="live-status ' + q.status + '">' + q.status + '</span></td>' +
-          '<td><strong>&pound;' + (q.total || 0).toLocaleString() + '</strong></td>' +
+          '<td><strong>&pound;' + (q.subTotal || 0).toLocaleString() + '</strong></td>' +
+          '<td style="color:#8b949e;">&pound;' + (q.total || 0).toLocaleString() + '</td>' +
           '<td><button class="btn-invoice" data-invoice="' + q.estimateId + '">Ready for Invoice</button></td>' +
           '</tr>';
       }
@@ -684,8 +688,9 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         mobileHtml += '<div class="mobile-card">' +
           '<div class="mobile-card-header">' +
             '<div><strong>' + q.estimateNumber + '</strong> <span class="live-status ' + q.status + '">' + q.status + '</span></div>' +
-            '<strong>&pound;' + (q.total || 0).toLocaleString() + '</strong>' +
+            '<strong>&pound;' + (q.subTotal || 0).toLocaleString() + '</strong>' +
           '</div>' +
+          '<div style="font-size:11px;color:#8b949e;">Total inc. VAT: &pound;' + (q.total || 0).toLocaleString() + ' &mdash; ' + (q.date || '') + '</div>' +
           '<div class="mobile-card-site">' + (q.customer || '') + '</div>' +
           '<div class="mobile-card-scope">' + (q.project || '') + (q.reference ? ' &mdash; ' + q.reference : '') + '</div>' +
           '<div style="margin-top:8px;"><button class="btn-invoice" data-invoice="' + q.estimateId + '" style="width:100%;">Ready for Invoice</button></div>' +
