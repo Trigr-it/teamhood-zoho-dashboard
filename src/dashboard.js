@@ -74,8 +74,10 @@ export function createDashboardRouter() {
             })),
             customFields: card.customFields,
             url: card.url,
+            updatedAt: card.updatedAt,
           };
-        });
+        })
+        .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
 
       res.json({ success: true, quotes: result });
     } catch (err) {
