@@ -278,8 +278,9 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <div class="header">
-    <div>
-      <h1>Node Group - Quote Dashboard</h1>
+    <div style="display:flex;align-items:center;gap:12px;">
+      <img src="/public/n-logo-orange.png" alt="Node" style="width:36px;height:36px;border-radius:4px;">
+      <h1>Quote Dashboard</h1>
     </div>
     <div>
       <span class="load-time" id="loadTime"></span>

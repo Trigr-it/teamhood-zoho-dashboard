@@ -3,13 +3,17 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { registerTeamhoodTools } from './teamhood/tools.js';
 import { registerZohoTools } from './zoho/tools.js';
 import { createDashboardRouter } from './dashboard.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.use(express.json());
+app.use('/public', express.static(join(__dirname, '../public')));
 
 // ---------------------------------------------------------------------------
 // Basic auth for dashboard (not MCP endpoints)
