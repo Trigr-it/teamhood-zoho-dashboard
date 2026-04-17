@@ -1,4 +1,7 @@
 import { Router } from 'express';
+import { readFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import * as api from './teamhood/api.js';
 import { zohoRequest } from './zoho/api.js';
 import { parseCardTitle } from './utils/title-parser.js';
@@ -6,7 +9,21 @@ import { lookupClient } from './utils/client-lookup.js';
 import { findSimilarQuotes } from './utils/quote-matcher.js';
 import { approveCard } from './approve.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const EXCLUDED_CLIENT_CODES = new Set(['BFT']);
+
+// ---------------------------------------------------------------------------
+// Quote reference DB loader (for financial dashboard)
+// ---------------------------------------------------------------------------
+
+function loadQuoteDb() {
+  const dbPath = process.env.QUOTE_DB_PATH || join(__dirname, '../data/quote_reference_db.json');
+  try { return JSON.parse(readFileSync(dbPath, 'utf-8')); } catch { return []; }
+}
+
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
 
 export function createDashboardRouter() {
   const router = Router();
@@ -96,7 +113,6 @@ export function createDashboardRouter() {
         }
       }
 
-      // Fetch custom fields to check invoice status — batch to avoid rate limits
       const liveQuotes = [];
       for (let i = 0; i < allEstimates.length; i += 5) {
         const batch = allEstimates.slice(i, i + 5);
@@ -155,31 +171,285 @@ export function createDashboardRouter() {
     }
   });
 
-  // --- Dashboard UI ---
-  router.get('/', (_req, res) => {
-    res.send(DASHBOARD_HTML);
+  // --- API: Dashboard summary (invoices from Zoho + quotes from reference DB) ---
+  router.get('/api/dashboard/summary', async (req, res) => {
+    try {
+      const { from_date, to_date, client, salesperson } = req.query;
+
+      // --- Zoho Sales by Customer report (ex-VAT figures matching Zoho reports) ---
+      const reportFrom = from_date || `${new Date().getFullYear()}-01-01`;
+      const reportTo = to_date || new Date().toISOString().split('T')[0];
+      let reportUrl = `/reports/salesbycustomer?per_page=200&from_date=${reportFrom}&to_date=${reportTo}`;
+      const reportData = await zohoRequest('GET', reportUrl);
+      let salesReport = reportData.sales || [];
+
+      // --- Fetch invoice list for monthly/salesperson breakdowns + outstanding ---
+      const allInvoices = [];
+      let page = 1;
+      while (true) {
+        let url = `/invoices?per_page=200&page=${page}&sort_column=date&sort_order=D`;
+        if (from_date) url += `&date_start=${from_date}`;
+        if (to_date) url += `&date_end=${to_date}`;
+        const data = await zohoRequest('GET', url);
+        allInvoices.push(...(data.invoices || []));
+        if (!data.page_context?.has_more_page) break;
+        page++;
+      }
+
+      // Exclude void invoices
+      let invoices = allInvoices.filter(inv => inv.status !== 'void');
+      if (client) invoices = invoices.filter(inv => inv.customer_name === client);
+      if (salesperson) invoices = invoices.filter(inv => inv.salesperson_name === salesperson);
+
+      // Revenue KPIs — use report (ex-VAT) when possible, fall back to invoice list when
+      // filtering by salesperson since the report API doesn't support that filter
+      if (client) salesReport = salesReport.filter(s => s.customer_name === client);
+      const invoiceRevenue = salesperson
+        ? invoices.reduce((s, inv) => s + (inv.total || 0), 0)
+        : salesReport.reduce((s, e) => s + parseFloat(e.sales || 0), 0);
+      const totalInvoices = invoices.length;
+      const avgInvoiceValue = totalInvoices > 0 ? Math.round(invoiceRevenue / totalInvoices) : 0;
+      const outstandingAmount = invoices
+        .filter(inv => (inv.balance || 0) > 0)
+        .reduce((s, inv) => s + (inv.balance || 0), 0);
+
+      // Sales by customer — report (ex-VAT) or invoice list when salesperson filtered
+      let salesByCustomer;
+      if (salesperson) {
+        const byCustomer = {};
+        for (const inv of invoices) {
+          const name = inv.customer_name || 'Unknown';
+          if (!byCustomer[name]) byCustomer[name] = { client: name, total: 0, count: 0 };
+          byCustomer[name].total += inv.total || 0;
+          byCustomer[name].count++;
+        }
+        salesByCustomer = Object.values(byCustomer).sort((a, b) => b.total - a.total).slice(0, 20);
+      } else {
+        salesByCustomer = salesReport
+          .map(s => ({ client: s.customer_name, total: parseFloat(s.sales || 0), count: parseInt(s.count || 0) }))
+          .sort((a, b) => b.total - a.total)
+          .slice(0, 20);
+      }
+
+      // Sales by salesperson from invoice list (uses total since list has no sub_total)
+      const bySalesperson = {};
+      for (const inv of invoices) {
+        const sp = inv.salesperson_name || 'Unassigned';
+        if (!bySalesperson[sp]) bySalesperson[sp] = { salesperson: sp, total: 0, count: 0 };
+        bySalesperson[sp].total += inv.total || 0;
+        bySalesperson[sp].count++;
+      }
+      const salesBySalesperson = Object.values(bySalesperson).sort((a, b) => b.total - a.total);
+
+      // Monthly revenue from invoice list
+      const byMonth = {};
+      for (const inv of invoices) {
+        if (!inv.date) continue;
+        const month = inv.date.substring(0, 7);
+        if (!byMonth[month]) byMonth[month] = { month, total: 0, count: 0 };
+        byMonth[month].total += inv.total || 0;
+        byMonth[month].count++;
+      }
+      const monthlySales = Object.values(byMonth).sort((a, b) => a.month.localeCompare(b.month));
+
+      // --- Quote metrics from reference DB ---
+      const db = loadQuoteDb();
+      let quotes = db;
+      if (from_date) quotes = quotes.filter(e => e.date >= from_date);
+      if (to_date) quotes = quotes.filter(e => e.date <= to_date);
+      if (client) quotes = quotes.filter(e => e.client === client);
+      if (salesperson) quotes = quotes.filter(e => e.salesperson === salesperson);
+
+      const totalQuotes = quotes.length;
+      const qInvoiced = quotes.filter(e => e.status === 'invoiced' || e.status === 'partially_invoiced').length;
+      const qSent = quotes.filter(e => e.status === 'sent').length;
+      const qAccepted = quotes.filter(e => e.status === 'accepted').length;
+      const conversionRate = (qSent + qAccepted + qInvoiced) > 0
+        ? Math.round((qInvoiced / (qSent + qAccepted + qInvoiced)) * 100)
+        : 0;
+      const pipelineValue = quotes
+        .filter(e => e.status === 'sent' || e.status === 'accepted')
+        .reduce((s, e) => s + (e.total || 0), 0);
+
+      // Quote pipeline by status
+      const byStatus = {};
+      for (const e of quotes) {
+        const st = e.status || 'unknown';
+        if (!byStatus[st]) byStatus[st] = { status: st, total: 0, count: 0 };
+        byStatus[st].total += e.total || 0;
+        byStatus[st].count++;
+      }
+      const pipeline = Object.values(byStatus);
+
+      // Filter options (union of invoice + quote clients)
+      const clients = [...new Set([
+        ...allInvoices.map(inv => inv.customer_name),
+        ...db.map(e => e.client),
+      ].filter(Boolean))].sort();
+      const salespersons = [...new Set([
+        ...allInvoices.map(inv => inv.salesperson_name),
+        ...db.map(e => e.salesperson),
+      ].filter(Boolean))].sort();
+
+      res.json({
+        success: true,
+        kpis: {
+          invoiceRevenue,
+          totalInvoices,
+          avgInvoiceValue,
+          outstandingAmount,
+          totalQuotes,
+          conversionRate,
+          pipelineValue,
+        },
+        salesByCustomer,
+        salesBySalesperson,
+        monthlySales,
+        pipeline,
+        filterOptions: { clients, salespersons },
+      });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
   });
+
+  // --- UI Routes ---
+  router.get('/', (_req, res) => res.send(pageShell('Home', 'home', '', landingPage())));
+  router.get('/pricing', (_req, res) => res.send(pageShell('Pricing', 'pricing', '', pricingPage())));
+  router.get('/dashboard', (_req, res) => res.send(pageShell('Dashboard', 'dashboard',
+    '<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>', dashboardPage())));
 
   return router;
 }
 
 // ---------------------------------------------------------------------------
-// Dashboard HTML
+// Shared page shell
 // ---------------------------------------------------------------------------
 
-const DASHBOARD_HTML = `<!DOCTYPE html>
+function pageShell(title, activeNav, headExtra, bodyContent) {
+  const navItems = [
+    { key: 'home', label: 'Home', href: '/' },
+    { key: 'pricing', label: 'Pricing', href: '/pricing' },
+    { key: 'dashboard', label: 'Dashboard', href: '/dashboard' },
+  ];
+  const navHtml = navItems.map(n =>
+    `<a href="${n.href}" class="nav-link${n.key === activeNav ? ' nav-active' : ''}">${n.label}</a>`
+  ).join('');
+
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Node Group - Quote Dashboard</title>
+  <title>Node Group \u2014 ${title}</title>
+  <link rel="icon" type="image/png" href="/public/n-logo-orange.png">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root { --o:#FF6700; --od:#CC5200; --ol:#FFF0E6; --ob:#FFCAA8; --k:#1A1A1A; --w:#FFFFFF; --bg:#F7F6F2; --bg2:#F0EEE8; --sb:#D8D4C8; --s:#727272; --mu:#999990; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'DM Sans', 'Futura', 'Century Gothic', sans-serif; background: var(--bg); color: var(--k); padding: 20px; line-height: 1.5; }
-    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1.5px solid var(--sb); }
+    body { font-family: 'DM Sans', 'Futura', 'Century Gothic', sans-serif; background: var(--bg); color: var(--k); line-height: 1.5; }
+    a { color: var(--o); text-decoration: none; font-weight: 600; }
+    a:hover { color: var(--od); }
+    .site-header { background: var(--w); border-bottom: 1.5px solid var(--sb); padding: 0 24px; display: flex; align-items: center; height: 56px; gap: 20px; }
+    .logo { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+    .logo:hover { color: var(--k); }
+    .logo img { width: 32px; height: 32px; border-radius: 4px; }
+    .logo-text { font-size: 15px; font-weight: 800; color: var(--k); letter-spacing: -0.02em; text-transform: uppercase; }
+    .nav { display: flex; gap: 4px; margin-left: 24px; }
+    .nav-link { padding: 8px 14px; border-radius: 3px; font-size: 13px; font-weight: 600; color: var(--mu); transition: all 0.15s; text-transform: uppercase; letter-spacing: 0.04em; }
+    .nav-link:hover { color: var(--k); background: var(--bg2); text-decoration: none; }
+    .nav-active { color: var(--o); background: var(--ol); }
+    .page { padding: 24px; max-width: 1400px; margin: 0 auto; }
     h1 { font-size: 22px; font-weight: 800; color: var(--o); letter-spacing: -0.02em; text-transform: uppercase; }
+    .subtitle { color: var(--s); margin-bottom: 20px; font-size: 14px; }
+    .loading { text-align: center; padding: 60px; color: var(--mu); font-size: 14px; }
+    .error { background: #fff0f0; border: 1.5px solid #cc3300; color: #cc3300; padding: 12px 16px; border-radius: 3px; margin-bottom: 16px; }
+    @media (max-width: 600px) {
+      .site-header { flex-wrap: wrap; height: auto; padding: 12px 16px; gap: 8px; }
+      .nav { margin-left: 0; gap: 2px; }
+      .nav-link { padding: 6px 10px; font-size: 11px; }
+      .page { padding: 16px; }
+    }
+  </style>
+  ${headExtra || ''}
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="logo">
+      <img src="/public/n-logo-orange.png" alt="N">
+      <span class="logo-text">Node Group</span>
+    </a>
+    <nav class="nav">${navHtml}</nav>
+  </header>
+  <div class="page">
+    ${bodyContent}
+  </div>
+</body>
+</html>`;
+}
+
+// ---------------------------------------------------------------------------
+// Landing page
+// ---------------------------------------------------------------------------
+
+function landingPage() {
+  return `
+    <div style="max-width:960px;margin:40px auto 0;">
+      <h1 style="font-size:28px;margin-bottom:8px;">Node Group Portal</h1>
+      <p class="subtitle">Scaffold design management tools</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;margin-top:32px;">
+        <a href="/pricing" style="text-decoration:none;">
+          <div class="tile-card">
+            <div class="tile-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--o)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+              </svg>
+            </div>
+            <div class="tile-title">Pricing</div>
+            <div class="tile-desc">Review Teamhood cards tagged &ldquo;Price Required&rdquo; and approve Zoho estimates</div>
+          </div>
+        </a>
+        <a href="/pricing?tab=live" style="text-decoration:none;">
+          <div class="tile-card">
+            <div class="tile-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--o)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+              </svg>
+            </div>
+            <div class="tile-title">Live Quotes</div>
+            <div class="tile-desc">Sent and accepted quotes not yet marked for invoicing</div>
+          </div>
+        </a>
+        <a href="/dashboard" style="text-decoration:none;">
+          <div class="tile-card">
+            <div class="tile-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--o)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+              </svg>
+            </div>
+            <div class="tile-title">Dashboard</div>
+            <div class="tile-desc">Financial overview with sales charts, KPIs, and pipeline tracking</div>
+          </div>
+        </a>
+      </div>
+    </div>
+    <style>
+      .tile-card { background: var(--w); border: 1.5px solid var(--sb); border-radius: 6px; padding: 32px; transition: all 0.2s; }
+      .tile-card:hover { border-color: var(--o); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(255,103,0,0.1); }
+      .tile-icon { margin-bottom: 16px; }
+      .tile-title { font-size: 18px; font-weight: 700; color: var(--k); margin-bottom: 8px; }
+      .tile-desc { font-size: 13px; color: var(--s); line-height: 1.5; font-weight: 400; }
+    </style>`;
+}
+
+// ---------------------------------------------------------------------------
+// Pricing page (existing quote dashboard with tabs)
+// ---------------------------------------------------------------------------
+
+function pricingPage() {
+  return `
+  <style>
+    .pricing-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1.5px solid var(--sb); }
     .btn-refresh { background: var(--o); color: var(--w); border: none; padding: 10px 20px; border-radius: 3px; cursor: pointer; font-size: 13px; font-weight: 700; font-family: inherit; transition: all 0.2s; }
     .btn-refresh:hover { background: var(--od); transform: translateY(-1px); }
     .btn-refresh:disabled { background: var(--sb); color: var(--mu); cursor: wait; }
@@ -213,12 +483,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .hours-input { background: var(--w); border: 1.5px solid var(--sb); color: var(--k); padding: 4px 8px; border-radius: 3px; width: 60px; font-size: 14px; font-family: 'DM Mono', monospace; text-align: right; }
     .hours-input:focus { outline: none; border-color: var(--o); }
     .rate-value { font-weight: 700; color: var(--o); font-size: 13px; margin-left: 4px; font-family: 'DM Mono', monospace; }
-    .loading { text-align: center; padding: 60px; color: var(--mu); font-size: 14px; }
-    .error { background: #fff0f0; border: 1.5px solid #cc3300; color: #cc3300; padding: 12px 16px; border-radius: 3px; margin-bottom: 16px; }
     .success-msg { font-size: 11px; color: #2d8a3e; margin-top: 4px; font-weight: 600; }
     .error-msg { font-size: 11px; color: #cc3300; margin-top: 4px; font-weight: 600; }
-    a { color: var(--o); text-decoration: none; font-weight: 600; }
-    a:hover { color: var(--od); }
     .expand-btn { cursor: pointer; color: var(--o); font-size: 12px; font-weight: 700; }
     .detail-row { display: none; }
     .detail-row.open { display: table-row; }
@@ -239,8 +505,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .btn-invoice:hover { background: var(--s); transform: translateY(-1px); }
     .btn-invoice:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
     .btn-invoice.done { background: var(--o); cursor: default; }
-
-    /* Mobile card layout */
     .mobile-cards { display: none; }
     .mobile-card { background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 14px; margin-bottom: 10px; }
     .mobile-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
@@ -261,9 +525,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     .mobile-card-tags { margin: 6px 0; }
     .mobile-card-assignee { color: var(--s); font-size: 12px; font-weight: 600; }
     .mobile-card-expand { color: var(--o); font-size: 12px; font-weight: 700; cursor: pointer; display: inline-block; margin-top: 6px; }
-
     @media (max-width: 900px) {
-      body { padding: 12px; }
+      .page { padding: 12px; }
       h1 { font-size: 16px; }
       .stats { gap: 8px; }
       .stat { padding: 10px 14px; min-width: 80px; }
@@ -275,13 +538,9 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       .mobile-cards { display: block; }
     }
   </style>
-</head>
-<body>
-  <div class="header">
-    <div style="display:flex;align-items:center;gap:12px;">
-      <img src="/public/n-logo-orange.png" alt="Node" style="width:36px;height:36px;border-radius:4px;">
-      <h1>Quote Dashboard</h1>
-    </div>
+
+  <div class="pricing-header">
+    <h1>Pricing</h1>
     <div>
       <span class="load-time" id="loadTime"></span>
       <button class="btn-refresh" id="refreshBtn" onclick="refreshCurrentTab()">Refresh</button>
@@ -301,7 +560,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       <select id="clientFilter" onchange="filterTable()"><option value="">All clients</option></select>
       <select id="assigneeFilter" onchange="filterTable()"><option value="">All assignees</option></select>
     </div>
-
     <div id="error"></div>
     <div id="content"><div class="loading">Loading quotes from Teamhood...</div></div>
   </div>
@@ -350,6 +608,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         allQuotes = data.quotes;
         const elapsed = ((Date.now() - start) / 1000).toFixed(1);
         document.getElementById('loadTime').textContent = 'Loaded in ' + elapsed + 's';
+        document.getElementById('pricingCount').textContent = allQuotes.length;
         renderStats();
         populateFilters();
         renderTable();
@@ -400,7 +659,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         const matchAssignee = !assignee || q.assignedUserName === assignee;
         return matchSearch && matchClient && matchAssignee;
       });
-      // Sort by site name when filtered by client, so projects group together
       if (client) {
         filtered.sort((a, b) => (a.siteName || '').localeCompare(b.siteName || ''));
       }
@@ -457,7 +715,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     function renderTable(quotes) {
       const list = quotes || allQuotes;
 
-      // --- Shared data prep per card ---
       function cardData(q) {
         const rate = q.suggestedRate;
         const rateDisplay = rate ? '&pound;' + (rate.weighted || rate.median) : '-';
@@ -484,16 +741,16 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           html += '<br><br><strong>Reference Quotes:</strong>';
           for (const sq of q.similarQuotes) {
             const clientTag = sq.isClientMatch ? ' <span style="color:#58a6ff;">(same client)</span>' : '';
-            html += '<div style="padding:4px 0;border-bottom:1px solid #21262d;' + (sq.isClientMatch ? 'background:#1c2128;padding:4px;border-radius:4px;margin:2px 0;' : '') + '">' +
+            html += '<div style="padding:4px 0;border-bottom:1px solid var(--sb);' + (sq.isClientMatch ? 'background:var(--ol);padding:4px;border-radius:4px;margin:2px 0;' : '') + '">' +
               '<strong>' + sq.estimateNumber + '</strong> ' + (sq.client || '') + clientTag +
               '<br>' + (sq.reference || '') +
-              ' &mdash; <strong>&pound;' + sq.total + '</strong> <span class="match-score">' + sq.matchScore + '</span> <span style="color:#484f58;">' + (sq.date || '') + '</span></div>';
+              ' &mdash; <strong>&pound;' + sq.total + '</strong> <span class="match-score">' + sq.matchScore + '</span> <span style="color:var(--mu);">' + (sq.date || '') + '</span></div>';
           }
         }
         return html;
       }
 
-      // --- Desktop table ---
+      // Desktop table
       let tableHtml = '<div class="desktop-table"><table><thead><tr>' +
         '<th></th><th>Card</th><th>Client</th><th>Site</th><th>Scope</th><th>Assignee</th>' +
         '<th>Keywords</th><th>Suggested</th><th>Top Match</th><th>Hours</th><th>Value</th><th></th>' +
@@ -519,7 +776,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       }
       tableHtml += '</tbody></table></div>';
 
-      // --- Mobile cards ---
+      // Mobile cards
       let mobileHtml = '<div class="mobile-cards">';
       for (const q of list) {
         const d = cardData(q);
@@ -553,7 +810,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       document.getElementById('content').innerHTML = tableHtml + mobileHtml;
     }
 
-    // Event delegation — attached once, handles all clicks
+    // Event delegation
     document.getElementById('content').addEventListener('click', function(e) {
       const approveBtn = e.target.closest('[data-approve]');
       if (approveBtn) {
@@ -563,9 +820,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       const toggleBtn = e.target.closest('[data-toggle]');
       if (toggleBtn) {
         const id = toggleBtn.dataset.toggle;
-        // Desktop: toggle detail row
         toggleDetail(id);
-        // Mobile: toggle detail div
         const mobileDetail = document.querySelector('.mobile-card-detail[data-detail="' + id + '"]');
         if (mobileDetail) {
           mobileDetail.classList.toggle('open');
@@ -575,19 +830,16 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       }
     });
 
-    // Update value display when hours input changes (desktop + mobile)
     document.getElementById('content').addEventListener('input', function(e) {
       if (e.target.classList.contains('hours-input')) {
         const id = e.target.id.replace('m-hours-', '').replace('hours-', '');
         const hours = parseFloat(e.target.value) || 0;
         const value = hours * 85;
-        // Update both desktop and mobile value displays
         const valueEl = document.getElementById('value-' + id);
         const mValueEl = document.getElementById('m-value-' + id);
         const text = String.fromCharCode(163) + value.toFixed(0);
         if (valueEl) valueEl.textContent = text;
         if (mValueEl) mValueEl.textContent = text;
-        // Sync hours between desktop and mobile inputs
         const desktopInput = document.getElementById('hours-' + id);
         const mobileInput = document.getElementById('m-hours-' + id);
         if (e.target !== desktopInput && desktopInput) desktopInput.value = e.target.value;
@@ -655,7 +907,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         const matchClient = !client || q.customer === client;
         return matchSearch && matchClient;
       });
-      // Always sort by date descending (most recent first)
       filtered.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
       return filtered;
     }
@@ -665,7 +916,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     function renderLiveTable(quotes) {
       const list = quotes || [...allLiveQuotes].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
-      // Desktop table
       let tableHtml = '<div class="desktop-table"><table><thead><tr>' +
         '<th>Quote</th><th>Date</th><th>Client</th><th>Project</th><th>Reference</th>' +
         '<th>Status</th><th>Sub Total</th><th>Total (inc. VAT)</th><th></th>' +
@@ -680,13 +930,12 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
           '<td>' + (q.reference || '') + '</td>' +
           '<td><span class="live-status ' + q.status + '">' + q.status + '</span></td>' +
           '<td><strong>&pound;' + (q.subTotal || 0).toLocaleString() + '</strong></td>' +
-          '<td style="color:#8b949e;">&pound;' + (q.total || 0).toLocaleString() + '</td>' +
+          '<td style="color:var(--mu);">&pound;' + (q.total || 0).toLocaleString() + '</td>' +
           '<td><button class="btn-invoice" data-invoice="' + q.estimateId + '">Ready for Invoice</button></td>' +
           '</tr>';
       }
       tableHtml += '</tbody></table></div>';
 
-      // Mobile cards
       let mobileHtml = '<div class="mobile-cards">';
       for (const q of list) {
         mobileHtml += '<div class="mobile-card">' +
@@ -694,7 +943,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             '<div><strong>' + q.estimateNumber + '</strong> <span class="live-status ' + q.status + '">' + q.status + '</span></div>' +
             '<strong>&pound;' + (q.subTotal || 0).toLocaleString() + '</strong>' +
           '</div>' +
-          '<div style="font-size:11px;color:#8b949e;">Total inc. VAT: &pound;' + (q.total || 0).toLocaleString() + ' &mdash; ' + (q.date || '') + '</div>' +
+          '<div style="font-size:11px;color:var(--mu);">Total inc. VAT: &pound;' + (q.total || 0).toLocaleString() + ' &mdash; ' + (q.date || '') + '</div>' +
           '<div class="mobile-card-site">' + (q.customer || '') + '</div>' +
           '<div class="mobile-card-scope">' + (q.project || '') + (q.reference ? ' &mdash; ' + q.reference : '') + '</div>' +
           '<div style="margin-top:8px;"><button class="btn-invoice" data-invoice="' + q.estimateId + '" style="width:100%;">Ready for Invoice</button></div>' +
@@ -719,7 +968,6 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
         if (!data.success) throw new Error(data.error);
         btn.textContent = 'Done';
         btn.classList.add('done');
-        // Remove from list after short delay
         setTimeout(() => {
           allLiveQuotes = allLiveQuotes.filter(q => q.estimateId !== estimateId);
           document.getElementById('liveCount').textContent = allLiveQuotes.length;
@@ -733,13 +981,326 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
       }
     }
 
-    // Live quotes event delegation
     document.getElementById('liveContent').addEventListener('click', function(e) {
       const invoiceBtn = e.target.closest('[data-invoice]');
       if (invoiceBtn) markInvoiceReady(invoiceBtn.dataset.invoice, invoiceBtn);
     });
 
+    // Auto-switch tab from URL param
+    const _urlTab = new URLSearchParams(window.location.search).get('tab');
+    if (_urlTab === 'live') switchTab('live');
+
     loadQuotes();
-  </script>
-</body>
-</html>`;
+  </script>`;
+}
+
+// ---------------------------------------------------------------------------
+// Financial dashboard page
+// ---------------------------------------------------------------------------
+
+function dashboardPage() {
+  return `
+  <style>
+    .dash-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    .stats { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+    .stat { background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 14px 18px; min-width: 130px; }
+    .stat-value { font-size: 26px; font-weight: 800; color: var(--o); }
+    .stat-label { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--mu); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .filters { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
+    .filters input, .filters select { background: var(--w); border: 1.5px solid var(--sb); color: var(--k); padding: 8px 12px; border-radius: 3px; font-size: 13px; font-family: inherit; }
+    .filters input:focus, .filters select:focus { outline: none; border-color: var(--o); }
+    .btn { background: var(--o); color: var(--w); border: none; padding: 8px 16px; border-radius: 3px; cursor: pointer; font-size: 13px; font-weight: 700; font-family: inherit; transition: all 0.2s; }
+    .btn:hover { background: var(--od); transform: translateY(-1px); }
+    .btn-secondary { background: var(--sb); color: var(--k); }
+    .btn-secondary:hover { background: var(--s); color: var(--w); transform: translateY(-1px); }
+    .chart-card { background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 20px; }
+    .chart-card h3 { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mu); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500; }
+    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+    table { width: 100%; border-collapse: collapse; background: var(--w); border: 1.5px solid var(--sb); }
+    thead { background: var(--bg2); }
+    th { text-align: left; padding: 10px 14px; font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 500; color: var(--mu); text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1.5px solid var(--sb); }
+    td { padding: 10px 14px; border-bottom: 1px solid var(--sb); font-size: 13px; }
+    tr:hover { background: var(--ol); }
+    .table-title { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mu); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500; }
+    @media (max-width: 900px) {
+      .charts-grid { grid-template-columns: 1fr; }
+      .filters { flex-direction: column; gap: 8px; }
+      .filters input, .filters select { width: 100%; }
+      .stats { gap: 8px; }
+      .stat { padding: 10px 14px; min-width: 80px; }
+      .stat-value { font-size: 20px; }
+    }
+  </style>
+
+  <div class="dash-header">
+    <div>
+      <h1>Dashboard</h1>
+      <p class="subtitle">Financial overview from quote reference data</p>
+    </div>
+  </div>
+
+  <div class="filters" id="dashFilters">
+    <input type="date" id="dashFrom" title="From date">
+    <input type="date" id="dashTo" title="To date">
+    <select id="dashClient"><option value="">All clients</option></select>
+    <select id="dashSp"><option value="">All salespersons</option></select>
+    <button class="btn" onclick="loadDashboard()">Apply</button>
+    <button class="btn btn-secondary" onclick="resetDash()">Reset</button>
+  </div>
+
+  <div class="stats" id="dashKpis"><div class="loading" id="dashLoading">Loading from Zoho...</div></div>
+  <div id="dashError"></div>
+
+  <div class="charts-grid">
+    <div class="chart-card">
+      <h3>Sales by Customer (Top 15)</h3>
+      <canvas id="chartCustomer"></canvas>
+    </div>
+    <div class="chart-card">
+      <h3>Sales by Salesperson</h3>
+      <canvas id="chartSalesperson"></canvas>
+    </div>
+  </div>
+
+  <div class="charts-grid">
+    <div class="chart-card">
+      <h3>Monthly Revenue</h3>
+      <canvas id="chartMonthly"></canvas>
+    </div>
+    <div class="chart-card">
+      <h3>Quote Pipeline</h3>
+      <canvas id="chartPipeline"></canvas>
+    </div>
+  </div>
+
+  <div class="table-title">Sales by Customer</div>
+  <div id="customerTable"></div>
+
+  <script>
+    Chart.defaults.color = '#727272';
+    Chart.defaults.borderColor = '#E8E4DA';
+    Chart.defaults.font.family = "'DM Sans', sans-serif";
+
+    let charts = {};
+    let dashData = null;
+
+    const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const STATUS_COLORS = {
+      draft: '#999990', sent: '#FF6700', accepted: '#2d8a3e',
+      invoiced: '#d29922', declined: '#cc3300', expired: '#b45309'
+    };
+    const SP_COLORS = ['#FF6700', '#2d8a3e', '#d29922', '#0891b2', '#7c3aed', '#cc3300', '#999990', '#b45309'];
+
+    async function loadDashboard() {
+      try {
+        const params = new URLSearchParams();
+        const from = document.getElementById('dashFrom').value;
+        const to = document.getElementById('dashTo').value;
+        const client = document.getElementById('dashClient').value;
+        const sp = document.getElementById('dashSp').value;
+        if (from) params.set('from_date', from);
+        if (to) params.set('to_date', to);
+        if (client) params.set('client', client);
+        if (sp) params.set('salesperson', sp);
+
+        const res = await fetch('/api/dashboard/summary?' + params.toString());
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        dashData = data;
+
+        renderKpis();
+        renderCharts();
+        renderCustomerTable();
+        populateDashFilters();
+      } catch (err) {
+        document.getElementById('dashError').innerHTML = '<div class="error">' + err.message + '</div>';
+      }
+    }
+
+    function populateDashFilters() {
+      if (!dashData?.filterOptions) return;
+      const cf = document.getElementById('dashClient');
+      const sf = document.getElementById('dashSp');
+      if (cf.options.length <= 1) {
+        dashData.filterOptions.clients.forEach(c => {
+          const o = document.createElement('option'); o.value = c; o.text = c; cf.add(o);
+        });
+      }
+      if (sf.options.length <= 1) {
+        dashData.filterOptions.salespersons.forEach(s => {
+          const o = document.createElement('option'); o.value = s; o.text = s; sf.add(o);
+        });
+      }
+    }
+
+    function resetDash() {
+      document.getElementById('dashFrom').value = new Date().getFullYear() + '-01-01';
+      document.getElementById('dashTo').value = '';
+      document.getElementById('dashClient').value = '';
+      document.getElementById('dashSp').value = '';
+      loadDashboard();
+    }
+
+    function renderKpis() {
+      const k = dashData.kpis;
+      document.getElementById('dashKpis').innerHTML =
+        '<div class="stat"><div class="stat-value">&pound;' + k.invoiceRevenue.toLocaleString() + '</div><div class="stat-label">Invoiced Revenue</div></div>' +
+        '<div class="stat"><div class="stat-value">' + k.totalInvoices + '</div><div class="stat-label">Invoices</div></div>' +
+        '<div class="stat"><div class="stat-value">&pound;' + k.avgInvoiceValue.toLocaleString() + '</div><div class="stat-label">Avg Invoice Value</div></div>' +
+        '<div class="stat"><div class="stat-value" style="color:#d29922">&pound;' + k.outstandingAmount.toLocaleString() + '</div><div class="stat-label">Outstanding</div></div>' +
+        '<div class="stat" style="border-left:3px solid var(--sb);"><div class="stat-value">' + k.totalQuotes + '</div><div class="stat-label">Quotes</div></div>' +
+        '<div class="stat"><div class="stat-value" style="color:#2d8a3e">' + k.conversionRate + '%</div><div class="stat-label">Conversion Rate</div></div>' +
+        '<div class="stat"><div class="stat-value" style="color:var(--o)">&pound;' + k.pipelineValue.toLocaleString() + '</div><div class="stat-label">Quote Pipeline</div></div>';
+    }
+
+    function destroyChart(key) {
+      if (charts[key]) { charts[key].destroy(); delete charts[key]; }
+    }
+
+    function renderCharts() {
+      // Sales by Customer - horizontal bar
+      destroyChart('customer');
+      const custData = dashData.salesByCustomer.slice(0, 15);
+      charts.customer = new Chart(document.getElementById('chartCustomer'), {
+        type: 'bar',
+        data: {
+          labels: custData.map(c => c.client.length > 25 ? c.client.substring(0, 25) + '...' : c.client),
+          datasets: [{
+            label: 'Total',
+            data: custData.map(c => c.total),
+            backgroundColor: '#FF6700',
+            borderRadius: 3,
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { callback: v => '\\u00a3' + v.toLocaleString() }, grid: { color: '#E8E4DA' } },
+            y: { grid: { display: false } }
+          }
+        }
+      });
+
+      // Sales by Salesperson - doughnut
+      destroyChart('salesperson');
+      const spData = dashData.salesBySalesperson;
+      charts.salesperson = new Chart(document.getElementById('chartSalesperson'), {
+        type: 'doughnut',
+        data: {
+          labels: spData.map(s => s.salesperson),
+          datasets: [{
+            data: spData.map(s => s.total),
+            backgroundColor: SP_COLORS.slice(0, spData.length),
+            borderColor: '#FFFFFF',
+            borderWidth: 2,
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { position: 'bottom', labels: { padding: 16, usePointStyle: true } },
+            tooltip: { callbacks: { label: ctx => ctx.label + ': \\u00a3' + ctx.parsed.toLocaleString() } }
+          }
+        }
+      });
+
+      // Monthly Revenue - line with area fill + quote count overlay
+      destroyChart('monthly');
+      const monthData = dashData.monthlySales;
+      charts.monthly = new Chart(document.getElementById('chartMonthly'), {
+        type: 'line',
+        data: {
+          labels: monthData.map(m => {
+            const parts = m.month.split('-');
+            return MONTH_NAMES[parseInt(parts[1], 10) - 1] + ' ' + parts[0].substring(2);
+          }),
+          datasets: [{
+            label: 'Revenue',
+            data: monthData.map(m => m.total),
+            borderColor: '#FF6700',
+            backgroundColor: 'rgba(255,103,0,0.08)',
+            fill: true,
+            tension: 0.3,
+            pointBackgroundColor: '#FF6700',
+          }, {
+            label: 'Quote Count',
+            data: monthData.map(m => m.count),
+            borderColor: '#2d8a3e',
+            backgroundColor: 'transparent',
+            borderDash: [4, 4],
+            tension: 0.3,
+            pointBackgroundColor: '#2d8a3e',
+            yAxisID: 'y1',
+          }]
+        },
+        options: {
+          responsive: true,
+          interaction: { intersect: false, mode: 'index' },
+          plugins: {
+            tooltip: {
+              callbacks: {
+                label: ctx => ctx.datasetIndex === 0
+                  ? 'Revenue: \\u00a3' + ctx.parsed.y.toLocaleString()
+                  : 'Quotes: ' + ctx.parsed.y
+              }
+            }
+          },
+          scales: {
+            y: { ticks: { callback: v => '\\u00a3' + v.toLocaleString() }, grid: { color: '#E8E4DA' } },
+            y1: { position: 'right', grid: { display: false }, ticks: { color: '#2d8a3e' } },
+            x: { grid: { color: '#E8E4DA' } }
+          }
+        }
+      });
+
+      // Pipeline - bar by status
+      destroyChart('pipeline');
+      const pipeData = dashData.pipeline;
+      const statusOrder = ['draft', 'sent', 'accepted', 'invoiced', 'declined', 'expired'];
+      const orderedPipe = statusOrder.map(s => pipeData.find(p => p.status === s)).filter(Boolean);
+      charts.pipeline = new Chart(document.getElementById('chartPipeline'), {
+        type: 'bar',
+        data: {
+          labels: orderedPipe.map(p => p.status.charAt(0).toUpperCase() + p.status.slice(1)),
+          datasets: [{
+            label: 'Value',
+            data: orderedPipe.map(p => p.total),
+            backgroundColor: orderedPipe.map(p => STATUS_COLORS[p.status] || '#999990'),
+            borderRadius: 3,
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { ticks: { callback: v => '\\u00a3' + v.toLocaleString() }, grid: { color: '#E8E4DA' } },
+            x: { grid: { display: false } }
+          }
+        }
+      });
+    }
+
+    function renderCustomerTable() {
+      const data = dashData.salesByCustomer;
+      let html = '<table><thead><tr>' +
+        '<th>Customer</th><th style="text-align:right">Quotes</th><th style="text-align:right">Total Value</th>' +
+        '<th style="text-align:right">Avg Value</th></tr></thead><tbody>';
+      for (const c of data) {
+        const avg = c.count > 0 ? Math.round(c.total / c.count) : 0;
+        html += '<tr><td><strong>' + c.client + '</strong></td>' +
+          '<td style="text-align:right">' + c.count + '</td>' +
+          '<td style="text-align:right;font-weight:700">&pound;' + c.total.toLocaleString() + '</td>' +
+          '<td style="text-align:right">&pound;' + avg.toLocaleString() + '</td></tr>';
+      }
+      html += '</tbody></table>';
+      document.getElementById('customerTable').innerHTML = html;
+    }
+
+    // Default date range: current year
+    document.getElementById('dashFrom').value = new Date().getFullYear() + '-01-01';
+
+    loadDashboard();
+  </script>`;
+}

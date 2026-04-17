@@ -144,7 +144,9 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log(`[node-quote-system] Running on port ${PORT}`);
-  console.log(`[node-quote-system] Dashboard:  http://localhost:${PORT}/`);
+  console.log(`[node-quote-system] Home:       http://localhost:${PORT}/`);
+  console.log(`[node-quote-system] Pricing:    http://localhost:${PORT}/pricing`);
+  console.log(`[node-quote-system] Dashboard:  http://localhost:${PORT}/dashboard`);
   console.log(`[node-quote-system] MCP SSE:    http://localhost:${PORT}/sse`);
   console.log(`[node-quote-system] MCP HTTP:   http://localhost:${PORT}/mcp`);
   console.log(`[node-quote-system] Health:     http://localhost:${PORT}/health`);
