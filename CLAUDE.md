@@ -171,8 +171,29 @@ PORT=3457 node --env-file=.env src/index.js
 
 ## Deployment
 
-Railway — single service, auto-deploy from git. Set all env vars in Railway dashboard.
-MCP endpoints available at `/sse` and `/mcp` for Claude connections.
+- **GitHub**: https://github.com/Trigr-it/teamhood-zoho-dashboard (auto-deploys on push)
+- **Railway**: eoelatjy.up.railway.app
+- **Custom domain**: https://zoho.nodegroup.co.uk
+- **DNS**: CNAME on Netlify (zoho → eoelatjy.up.railway.app)
+- **Auth**: HTTP Basic Auth on dashboard (DASH_PASSWORD env var). MCP endpoints unauthenticated.
+- **Env vars on Railway**: TEAMHOOD_* (5), ZOHO_* (5), PORT, DASH_PASSWORD
+
+## Live Quotes Tab
+
+Second tab showing sent/accepted Zoho estimates not yet marked for invoicing.
+- "Ready for Invoice" button sets `cf_invoice_status` to `C01 - Full Invoice`
+- Quote removed from view after marking
+- Sorted by most recent first
+- Shows sub total (main) and total inc. VAT (secondary)
+
+## Styling
+
+Matches Node Group website (nodegroup.co.uk):
+- Light mode, warm off-white background (#F7F6F2)
+- Orange accent (#FF6700)
+- DM Sans body font, DM Mono for technical labels
+- N moniker logo (public/n-logo-orange.png)
+- 3px border-radius, 1.5px borders in warm grey (#D8D4C8)
 
 ## Team
 
