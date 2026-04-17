@@ -577,7 +577,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     // Update value display when hours input changes (desktop + mobile)
     document.getElementById('content').addEventListener('input', function(e) {
       if (e.target.classList.contains('hours-input')) {
-        const id = e.target.id.replace('hours-', '').replace('m-hours-', '');
+        const id = e.target.id.replace('m-hours-', '').replace('hours-', '');
         const hours = parseFloat(e.target.value) || 0;
         const value = hours * 85;
         // Update both desktop and mobile value displays
