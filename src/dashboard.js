@@ -253,44 +253,16 @@ export function createDashboardRouter() {
       }
       const salesBySalesperson = Object.values(bySalesperson).sort((a, b) => b.total - a.total);
 
-      // Monthly revenue from Zoho Sales by Salesperson report (ex-VAT, matches Zoho reports)
-      const monthRanges = [];
-      {
-        const startDate = new Date(reportFrom + 'T00:00:00');
-        const endDate = reportTo ? new Date(reportTo + 'T00:00:00') : new Date();
-        let cur = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
-        while (cur <= endDate) {
-          const yr = cur.getFullYear();
-          const mo = cur.getMonth() + 1;
-          const moStr = String(mo).padStart(2, '0');
-          const lastDay = new Date(yr, mo, 0).getDate();
-          monthRanges.push({
-            month: yr + '-' + moStr,
-            from: yr + '-' + moStr + '-01',
-            to: yr + '-' + moStr + '-' + String(lastDay).padStart(2, '0'),
-          });
-          cur.setMonth(cur.getMonth() + 1);
-        }
+      // Monthly revenue from invoice list (avoids extra API calls)
+      const byMonth = {};
+      for (const inv of invoices) {
+        if (!inv.date) continue;
+        const month = inv.date.substring(0, 7);
+        if (!byMonth[month]) byMonth[month] = { month, total: 0, count: 0 };
+        byMonth[month].total += inv.total || 0;
+        byMonth[month].count++;
       }
-      // Fetch report per month in batches of 4 to stay within rate limits
-      const monthlySales = [];
-      for (let i = 0; i < monthRanges.length; i += 4) {
-        const batch = monthRanges.slice(i, i + 4);
-        const results = await Promise.all(batch.map(async (mr) => {
-          try {
-            let url = `/reports/salesbysalesperson?per_page=200&from_date=${mr.from}&to_date=${mr.to}`;
-            const data = await zohoRequest('GET', url);
-            const rows = data.sales || [];
-            let filteredRows = rows;
-            if (salesperson) filteredRows = rows.filter(r => r.salesperson_name === salesperson);
-            const total = filteredRows.reduce((s, r) => s + parseFloat(r.sales || 0), 0);
-            const count = filteredRows.reduce((s, r) => s + parseInt(r.invoice_count || 0), 0);
-            return { month: mr.month, total, count };
-          } catch { return { month: mr.month, total: 0, count: 0 }; }
-        }));
-        monthlySales.push(...results);
-        if (i + 4 < monthRanges.length) await new Promise(r => setTimeout(r, 200));
-      }
+      const monthlySales = Object.values(byMonth).sort((a, b) => a.month.localeCompare(b.month));
 
       // --- Quote metrics from reference DB ---
       const db = loadQuoteDb();
