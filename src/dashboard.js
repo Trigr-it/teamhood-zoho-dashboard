@@ -1042,8 +1042,17 @@ function dashboardPage() {
   </div>
 
   <div class="filters" id="dashFilters">
-    <input type="date" id="dashFrom" title="From date">
-    <input type="date" id="dashTo" title="To date">
+    <select id="dashPeriod" onchange="onPeriodChange()">
+      <option value="this_month">This Month</option>
+      <option value="last_month">Last Month</option>
+      <option value="this_quarter">This Quarter</option>
+      <option value="last_quarter">Last Quarter</option>
+      <option value="this_year" selected>This Year</option>
+      <option value="last_year">Last Year</option>
+      <option value="custom">Custom</option>
+    </select>
+    <input type="date" id="dashFrom" title="From date" style="display:none">
+    <input type="date" id="dashTo" title="To date" style="display:none">
     <select id="dashClient"><option value="">All clients</option></select>
     <select id="dashSp"><option value="">All salespersons</option></select>
     <button class="btn" onclick="loadDashboard()">Apply</button>
@@ -1093,6 +1102,60 @@ function dashboardPage() {
     };
     const SP_COLORS = ['#FF6700', '#2d8a3e', '#d29922', '#0891b2', '#7c3aed', '#cc3300', '#999990', '#b45309'];
 
+    function getPeriodDates(period) {
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = now.getMonth(); // 0-based
+      const pad = n => String(n).padStart(2, '0');
+      const fmt = (yr, mo, dy) => yr + '-' + pad(mo) + '-' + pad(dy);
+      const lastDay = (yr, mo) => new Date(yr, mo, 0).getDate();
+
+      switch (period) {
+        case 'this_month':
+          return { from: fmt(y, m + 1, 1), to: fmt(y, m + 1, lastDay(y, m + 1)) };
+        case 'last_month': {
+          const ly = m === 0 ? y - 1 : y;
+          const lm = m === 0 ? 12 : m;
+          return { from: fmt(ly, lm, 1), to: fmt(ly, lm, lastDay(ly, lm)) };
+        }
+        case 'this_quarter': {
+          const q = Math.floor(m / 3);
+          const qs = q * 3 + 1;
+          return { from: fmt(y, qs, 1), to: fmt(y, qs + 2, lastDay(y, qs + 2)) };
+        }
+        case 'last_quarter': {
+          let q = Math.floor(m / 3) - 1;
+          let qy = y;
+          if (q < 0) { q = 3; qy = y - 1; }
+          const qs = q * 3 + 1;
+          return { from: fmt(qy, qs, 1), to: fmt(qy, qs + 2, lastDay(qy, qs + 2)) };
+        }
+        case 'this_year':
+          return { from: fmt(y, 1, 1), to: '' };
+        case 'last_year':
+          return { from: fmt(y - 1, 1, 1), to: fmt(y - 1, 12, 31) };
+        default:
+          return { from: '', to: '' };
+      }
+    }
+
+    function onPeriodChange() {
+      const period = document.getElementById('dashPeriod').value;
+      const fromEl = document.getElementById('dashFrom');
+      const toEl = document.getElementById('dashTo');
+      if (period === 'custom') {
+        fromEl.style.display = '';
+        toEl.style.display = '';
+      } else {
+        fromEl.style.display = 'none';
+        toEl.style.display = 'none';
+        const dates = getPeriodDates(period);
+        fromEl.value = dates.from;
+        toEl.value = dates.to;
+      }
+      loadDashboard();
+    }
+
     async function loadDashboard() {
       try {
         const params = new URLSearchParams();
@@ -1136,10 +1199,14 @@ function dashboardPage() {
     }
 
     function resetDash() {
-      document.getElementById('dashFrom').value = new Date().getFullYear() + '-01-01';
-      document.getElementById('dashTo').value = '';
+      document.getElementById('dashPeriod').value = 'this_year';
+      document.getElementById('dashFrom').style.display = 'none';
+      document.getElementById('dashTo').style.display = 'none';
       document.getElementById('dashClient').value = '';
       document.getElementById('dashSp').value = '';
+      const dates = getPeriodDates('this_year');
+      document.getElementById('dashFrom').value = dates.from;
+      document.getElementById('dashTo').value = dates.to;
       loadDashboard();
     }
 
@@ -1300,8 +1367,10 @@ function dashboardPage() {
       document.getElementById('customerTable').innerHTML = html;
     }
 
-    // Default date range: current year
-    document.getElementById('dashFrom').value = new Date().getFullYear() + '-01-01';
+    // Default: This Year
+    const initDates = getPeriodDates('this_year');
+    document.getElementById('dashFrom').value = initDates.from;
+    document.getElementById('dashTo').value = initDates.to;
 
     loadDashboard();
   </script>`;
