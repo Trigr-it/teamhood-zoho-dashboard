@@ -1275,7 +1275,7 @@ function dashboardPage() {
         }
       });
 
-      // Monthly Revenue - line with area fill + quote count overlay
+      // Monthly Revenue - line with area fill + invoice count overlay
       destroyChart('monthly');
       const monthData = dashData.monthlySales;
       charts.monthly = new Chart(document.getElementById('chartMonthly'), {
@@ -1294,7 +1294,7 @@ function dashboardPage() {
             tension: 0.3,
             pointBackgroundColor: '#FF6700',
           }, {
-            label: 'Quote Count',
+            label: 'Invoices',
             data: monthData.map(m => m.count),
             borderColor: '#2d8a3e',
             backgroundColor: 'transparent',
@@ -1312,7 +1312,7 @@ function dashboardPage() {
               callbacks: {
                 label: ctx => ctx.datasetIndex === 0
                   ? 'Revenue: \\u00a3' + ctx.parsed.y.toLocaleString()
-                  : 'Quotes: ' + ctx.parsed.y
+                  : 'Invoices: ' + ctx.parsed.y
               }
             }
           },
