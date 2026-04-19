@@ -1083,7 +1083,7 @@ function dashboardPage() {
     <input type="date" id="dashTo" title="To date" style="display:none">
     <select id="dashClient"><option value="">All clients</option></select>
     <select id="dashSp"><option value="">All salespersons</option></select>
-    <button class="btn" onclick="loadDashboard()">Apply</button>
+    <button class="btn" id="dashApply" onclick="loadDashboard()">Apply</button>
     <button class="btn btn-secondary" onclick="resetDash()">Reset</button>
   </div>
 
@@ -1159,7 +1159,7 @@ function dashboardPage() {
           return { from: fmt(qy, qs, 1), to: fmt(qy, qs + 2, lastDay(qy, qs + 2)) };
         }
         case 'this_year':
-          return { from: fmt(y, 1, 1), to: '' };
+          return { from: fmt(y, 1, 1), to: fmt(y, m + 1, now.getDate()) };
         case 'last_year':
           return { from: fmt(y - 1, 1, 1), to: fmt(y - 1, 12, 31) };
         default:
@@ -1185,6 +1185,12 @@ function dashboardPage() {
     }
 
     async function loadDashboard() {
+      const btn = document.getElementById('dashApply');
+      btn.disabled = true;
+      btn.textContent = 'Loading...';
+      document.getElementById('dashError').innerHTML = '';
+      document.getElementById('dashKpis').innerHTML = '<div class="loading">Loading from Zoho...</div>';
+
       try {
         const params = new URLSearchParams();
         const from = document.getElementById('dashFrom').value;
@@ -1206,7 +1212,11 @@ function dashboardPage() {
         renderCustomerTable();
         populateDashFilters();
       } catch (err) {
+        document.getElementById('dashKpis').innerHTML = '';
         document.getElementById('dashError').innerHTML = '<div class="error">' + err.message + '</div>';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Apply';
       }
     }
 
