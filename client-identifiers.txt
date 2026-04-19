@@ -48,6 +48,7 @@ NGF   Next Gen Facades
 NGS   NxtGen Scaffolding
 NKS   NK Scaffolding
 NOD   Node Scaffold Design Ltd
+OSS   Onsite Scaffold Services
 PLS   Park Lane Scaffolding
 PRO   Proplant Scaffolding
 RIS   Rise Scaffolding

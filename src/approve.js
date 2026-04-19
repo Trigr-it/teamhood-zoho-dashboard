@@ -457,6 +457,15 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
     throw new Error(`Zoho error: ${result.message || JSON.stringify(result)}`);
   }
 
+  // Remove "Price Required" tag from Teamhood card now that the estimate is created
+  let tagRemoved = false;
+  try {
+    await teamhoodApi.removeTag(cardId, 'Price Required');
+    tagRemoved = true;
+  } catch (err) {
+    console.warn(`[approve] Could not remove "Price Required" tag from ${card.displayId}:`, err.message);
+  }
+
   return {
     success: true,
     estimateId: result.estimate?.estimate_id,
@@ -467,5 +476,6 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
     displayId: card.displayId,
     rate,
     isIreland,
+    tagRemoved,
   };
 }

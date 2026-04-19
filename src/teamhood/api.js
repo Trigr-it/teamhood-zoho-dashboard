@@ -257,15 +257,9 @@ export async function createCard({ title, statusId, assignedUserId, description,
 export async function updateCard(cardId, fields) {
   const uuid = await resolveCardId(cardId);
 
-  // Fetch current card so we can merge for the PUT
-  const current = await apiFetch(`${V1}/items/${uuid}`);
-  if (!current) throw new Error(`Card not found: ${cardId}`);
-
-  const merged = { ...current, ...fields };
-
   const data = await apiFetch(`${V1}/items/${uuid}`, {
     method: 'PUT',
-    body: JSON.stringify(merged),
+    body: JSON.stringify({ data: fields }),
   });
 
   if (data?.displayId) cacheDisplayId(data.displayId, data.id);
@@ -277,10 +271,12 @@ export async function removeTag(cardId, tagToRemove) {
   const current = await apiFetch(`${V1}/items/${uuid}`);
   if (!current) throw new Error(`Card not found: ${cardId}`);
 
-  const updatedTags = (current.tags || []).filter(t => t !== tagToRemove);
+  const currentTags = (current.tags || []).map(t => typeof t === 'string' ? t : t.name || t);
+  const updatedTags = currentTags.filter(t => t !== tagToRemove);
+
   const data = await apiFetch(`${V1}/items/${uuid}`, {
     method: 'PUT',
-    body: JSON.stringify({ ...current, tags: updatedTags }),
+    body: JSON.stringify({ data: { tags: updatedTags } }),
   });
 
   return formatCard(data);

@@ -63,7 +63,7 @@ Header: `X-ApiKey: YOUR_API_KEY`
 - Response envelope: `{ "items": [...] }`, `{ "workspaces": [...] }` etc — unwrap by finding the array
 - Field naming: `title` (not `name`), `id` for UUIDs
 - Pagination: API ignores `page`/`pageSize`, returns all at once with `nextPageUrl`
-- **API key is read-only** — PUT/DELETE return 500. Cannot update cards or remove tags.
+- **PUT requires `{ data: { ... } }` envelope** — fields go inside `data`, not flat. Tags are string arrays.
 
 ### Endpoint Reference
 - `GET /api/v1/workspaces` — list workspaces
@@ -137,7 +137,7 @@ OAuth2 refresh token flow (EU region: `zoho.eu`)
 4. **Always use `assignedUserId`** — never `ownerId` (owner = creator, not assignee)
 5. **Irish client codes**: LAO, MSL, GCS, AIN, 3SC, BHL, GAB, GRP → IE salesperson, no VAT
 6. **Rates in half-hour increments** — all pricing based on hours × £85/hr
-7. **Teamhood API key is read-only** — cannot remove tags or update cards via API
+7. **Teamhood PUT needs `{ data: {} }` envelope** — approve flow auto-removes "Price Required" tag
 8. **Line item name**: "- Design & Analysis (UK)", "- Design & Analysis (IE)", or "- Design & Analysis (Hoist)"
 
 ## Environment Variables
