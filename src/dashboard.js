@@ -213,26 +213,37 @@ export function createDashboardRouter() {
       if (client) invoices = invoices.filter(inv => inv.customer_name === client);
       if (salesperson) invoices = invoices.filter(inv => inv.salesperson_name === salesperson);
 
-      // Revenue KPIs — use report (ex-VAT) when possible, fall back to invoice list when
-      // filtering by salesperson since the report API doesn't support that filter
+      // Derive ex-VAT from invoice total: Ireland salespersons = 0% VAT, all others = 20%
+      function exVat(inv) {
+        const sp = (inv.salesperson_name || '').toLowerCase();
+        if (sp.includes('ireland')) return inv.total || 0;
+        return Math.round(((inv.total || 0) / 1.2) * 100) / 100;
+      }
+      function exVatBalance(inv) {
+        const sp = (inv.salesperson_name || '').toLowerCase();
+        if (sp.includes('ireland')) return inv.balance || 0;
+        return Math.round(((inv.balance || 0) / 1.2) * 100) / 100;
+      }
+
+      // Revenue KPIs (all ex-VAT)
       if (client) salesReport = salesReport.filter(s => s.customer_name === client);
       const invoiceRevenue = salesperson
-        ? invoices.reduce((s, inv) => s + (inv.total || 0), 0)
+        ? invoices.reduce((s, inv) => s + exVat(inv), 0)
         : salesReport.reduce((s, e) => s + parseFloat(e.sales || 0), 0);
       const totalInvoices = invoices.length;
       const avgInvoiceValue = totalInvoices > 0 ? Math.round(invoiceRevenue / totalInvoices) : 0;
       const outstandingAmount = invoices
         .filter(inv => (inv.balance || 0) > 0)
-        .reduce((s, inv) => s + (inv.balance || 0), 0);
+        .reduce((s, inv) => s + exVatBalance(inv), 0);
 
-      // Sales by customer — report (ex-VAT) or invoice list when salesperson filtered
+      // Sales by customer (ex-VAT)
       let salesByCustomer;
       if (salesperson) {
         const byCustomer = {};
         for (const inv of invoices) {
           const name = inv.customer_name || 'Unknown';
           if (!byCustomer[name]) byCustomer[name] = { client: name, total: 0, count: 0 };
-          byCustomer[name].total += inv.total || 0;
+          byCustomer[name].total += exVat(inv);
           byCustomer[name].count++;
         }
         salesByCustomer = Object.values(byCustomer).sort((a, b) => b.total - a.total).slice(0, 20);
@@ -243,23 +254,23 @@ export function createDashboardRouter() {
           .slice(0, 20);
       }
 
-      // Sales by salesperson from invoice list (uses total since list has no sub_total)
+      // Sales by salesperson (ex-VAT)
       const bySalesperson = {};
       for (const inv of invoices) {
         const sp = inv.salesperson_name || 'Unassigned';
         if (!bySalesperson[sp]) bySalesperson[sp] = { salesperson: sp, total: 0, count: 0 };
-        bySalesperson[sp].total += inv.total || 0;
+        bySalesperson[sp].total += exVat(inv);
         bySalesperson[sp].count++;
       }
       const salesBySalesperson = Object.values(bySalesperson).sort((a, b) => b.total - a.total);
 
-      // Monthly revenue from invoice list (avoids extra API calls)
+      // Monthly revenue (ex-VAT)
       const byMonth = {};
       for (const inv of invoices) {
         if (!inv.date) continue;
         const month = inv.date.substring(0, 7);
         if (!byMonth[month]) byMonth[month] = { month, total: 0, count: 0 };
-        byMonth[month].total += inv.total || 0;
+        byMonth[month].total += exVat(inv);
         byMonth[month].count++;
       }
       const monthlySales = Object.values(byMonth).sort((a, b) => a.month.localeCompare(b.month));
