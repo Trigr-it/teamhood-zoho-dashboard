@@ -101,6 +101,16 @@ export function createDashboardRouter() {
     }
   });
 
+  // --- API: Remove "Price Required" tag (mark as done without creating estimate) ---
+  router.post('/api/cards/:cardId/done', async (req, res) => {
+    try {
+      const result = await api.removeTag(req.params.cardId, 'Price Required');
+      res.json({ success: true, displayId: result?.displayId });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // --- API: List live quotes (sent/accepted, not yet marked for invoice) ---
   router.get('/api/live-quotes', async (_req, res) => {
     try {
@@ -512,6 +522,9 @@ function pricingPage() {
     .btn-approve:hover { background: var(--od); transform: translateY(-1px); }
     .btn-approve:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
     .btn-approve.approved { background: var(--s); cursor: default; }
+    .btn-done { background: var(--bg2); color: var(--s); border: 1.5px solid var(--sb); padding: 6px 12px; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600; font-family: inherit; transition: all 0.2s; margin-top: 4px; display: block; width: 100%; }
+    .btn-done:hover { background: var(--sb); color: var(--k); }
+    .btn-done:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
     .hours-input { background: var(--w); border: 1.5px solid var(--sb); color: var(--k); padding: 4px 8px; border-radius: 3px; width: 60px; font-size: 14px; font-family: 'DM Mono', monospace; text-align: right; }
     .hours-input:focus { outline: none; border-color: var(--o); }
     .rate-value { font-weight: 700; color: var(--o); font-size: 13px; margin-left: 4px; font-family: 'DM Mono', monospace; }
@@ -748,7 +761,7 @@ function pricingPage() {
           '<td class="match">' + d.matchDisplay + '<br>' + d.matchScoreDisplay + '</td>' +
           '<td><input type="number" class="hours-input" id="hours-' + q.id + '" value="' + d.defaultHours + '" min="0" step="0.5" style="width:60px"> <span class="rate-value" id="value-' + q.id + '">&pound;' + d.defaultRate + '</span></td>' +
           '<td></td>' +
-          '<td><button class="btn-approve" data-approve="' + q.id + '">Approve</button></td>' +
+          '<td><button class="btn-approve" data-approve="' + q.id + '">Approve</button><button class="btn-done" data-done="' + q.id + '">Done</button></td>' +
           '</tr>';
         tableHtml += '<tr class="detail-row" data-id="' + q.id + '" style="display:none"><td colspan="13" class="detail-cell">' + detailHtml(q) + '</td></tr>';
       }
@@ -777,6 +790,7 @@ function pricingPage() {
             '<input type="number" class="hours-input" id="m-hours-' + q.id + '" value="' + d.defaultHours + '" min="0" step="0.5">' +
             '<span class="rate-value" id="m-value-' + q.id + '">&pound;' + d.defaultRate + '</span>' +
             '<button class="btn-approve" data-approve="' + q.id + '">Approve</button>' +
+            '<button class="btn-done" data-done="' + q.id + '">Done</button>' +
           '</div>' +
           '<span class="mobile-card-expand" data-toggle="' + q.id + '">Show details</span>' +
           '<div class="mobile-card-detail" data-detail="' + q.id + '">' + detailHtml(q) + '</div>' +
@@ -787,9 +801,32 @@ function pricingPage() {
       document.getElementById('content').innerHTML = tableHtml + mobileHtml;
     }
 
+    async function markDone(id, btn) {
+      if (!confirm('Remove "Price Required" tag from this card?')) return;
+      btn.disabled = true;
+      btn.textContent = 'Removing...';
+      try {
+        const res = await fetch('/api/cards/' + id + '/done', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        allQuotes = allQuotes.filter(q => q.id !== id);
+        renderStats();
+        renderTable(getFilteredQuotes());
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Done';
+        alert('Error: ' + err.message);
+      }
+    }
+
     document.getElementById('content').addEventListener('click', function(e) {
       const approveBtn = e.target.closest('[data-approve]');
       if (approveBtn) { approveQuote(approveBtn.dataset.approve, approveBtn); return; }
+      const doneBtn = e.target.closest('[data-done]');
+      if (doneBtn) { markDone(doneBtn.dataset.done, doneBtn); return; }
       const toggleBtn = e.target.closest('[data-toggle]');
       if (toggleBtn) {
         const id = toggleBtn.dataset.toggle;
