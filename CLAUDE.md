@@ -135,7 +135,7 @@ OAuth2 refresh token flow (EU region: `zoho.eu`)
 2. **Completed cards included** — design done ≠ pricing done
 3. **Archived cards excluded**
 4. **Always use `assignedUserId`** — never `ownerId` (owner = creator, not assignee)
-5. **Irish client codes**: LAO, MSL, GCS, AIN, 3SC, BHL, GAB, GRP → IE salesperson, no VAT
+5. **Irish client codes**: LAO, MSL, GCS, AIN, 3SC, BHL, GAB, GRP → IE salesperson, Zero Rate VAT
 6. **Rates in half-hour increments** — all pricing based on hours × £85/hr
 7. **Teamhood PUT needs `{ data: {} }` envelope** — approve flow auto-removes "Price Required" tag
 8. **Line item name**: "- Design & Analysis (UK)", "- Design & Analysis (IE)", or "- Design & Analysis (Hoist)"

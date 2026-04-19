@@ -4,7 +4,8 @@ import { parseCardTitle } from './utils/title-parser.js';
 import { lookupClient } from './utils/client-lookup.js';
 import { findSimilarQuotes } from './utils/quote-matcher.js';
 
-const DEFAULT_TAX_ID = '70776000000030063'; // Standard Rate VAT
+const DEFAULT_TAX_ID = '70776000000030063'; // Standard Rate VAT 20%
+const ZERO_TAX_ID = '70776000000030067';   // Zero Rate VAT 0%
 
 // Salesperson IDs
 const SALESPERSON = {
@@ -445,7 +446,7 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
       description: lineItemDescription,
       quantity,
       rate: rate || 0,
-      tax_id: isIreland ? undefined : DEFAULT_TAX_ID,
+      tax_id: isIreland ? ZERO_TAX_ID : DEFAULT_TAX_ID,
     }],
   };
 
