@@ -346,6 +346,7 @@ export function createDashboardRouter() {
   // --- UI Routes ---
   router.get('/', (_req, res) => res.send(pageShell('Home', 'home', '', landingPage())));
   router.get('/pricing', (_req, res) => res.send(pageShell('Pricing', 'pricing', '', pricingPage())));
+  router.get('/live-quotes', (_req, res) => res.send(pageShell('Live Quotes', 'live-quotes', '', liveQuotesPage())));
   router.get('/dashboard', (_req, res) => res.send(pageShell('Dashboard', 'dashboard',
     '<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>', dashboardPage())));
 
@@ -360,6 +361,7 @@ function pageShell(title, activeNav, headExtra, bodyContent) {
   const navItems = [
     { key: 'home', label: 'Home', href: '/' },
     { key: 'pricing', label: 'Pricing', href: '/pricing' },
+    { key: 'live-quotes', label: 'Live Quotes', href: '/live-quotes' },
     { key: 'dashboard', label: 'Dashboard', href: '/dashboard' },
   ];
   const navHtml = navItems.map(n =>
@@ -439,7 +441,7 @@ function landingPage() {
             <div class="tile-desc">Review Teamhood cards tagged &ldquo;Price Required&rdquo; and approve Zoho estimates</div>
           </div>
         </a>
-        <a href="/pricing?tab=live" style="text-decoration:none;">
+        <a href="/live-quotes" style="text-decoration:none;">
           <div class="tile-card">
             <div class="tile-icon">
               <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--o)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -520,21 +522,6 @@ function pricingPage() {
     .detail-row.open { display: table-row; }
     .detail-cell { background: var(--bg2); padding: 16px !important; font-size: 12px; color: var(--s); }
     .load-time { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mu); margin-left: 12px; }
-    .tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 1.5px solid var(--sb); }
-    .tab { padding: 10px 24px; font-size: 13px; font-weight: 700; color: var(--mu); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1.5px; transition: all 0.2s; text-transform: uppercase; letter-spacing: 0.04em; }
-    .tab:hover { color: var(--k); }
-    .tab.active { color: var(--o); border-bottom-color: var(--o); }
-    .tab-count { background: var(--ob); color: var(--od); padding: 1px 8px; border-radius: 2px; font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 500; margin-left: 6px; }
-    .tab-panel { display: none; }
-    .tab-panel.active { display: block; }
-    .live-row { font-size: 13px; }
-    .live-status { display: inline-block; padding: 2px 8px; border-radius: 2px; font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
-    .live-status.sent { background: var(--ol); color: var(--o); }
-    .live-status.accepted { background: #e6f4ea; color: #2d8a3e; }
-    .btn-invoice { background: var(--k); color: var(--w); border: none; padding: 8px 16px; border-radius: 3px; cursor: pointer; font-size: 13px; font-weight: 700; font-family: inherit; transition: all 0.2s; }
-    .btn-invoice:hover { background: var(--s); transform: translateY(-1px); }
-    .btn-invoice:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
-    .btn-invoice.done { background: var(--o); cursor: default; }
     .mobile-cards { display: none; }
     .mobile-card { background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 14px; margin-bottom: 10px; }
     .mobile-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
@@ -573,56 +560,21 @@ function pricingPage() {
     <h1>Pricing</h1>
     <div>
       <span class="load-time" id="loadTime"></span>
-      <button class="btn-refresh" id="refreshBtn" onclick="refreshCurrentTab()">Refresh</button>
+      <button class="btn-refresh" id="refreshBtn" onclick="loadQuotes()">Refresh</button>
     </div>
   </div>
 
-  <div class="tabs">
-    <div class="tab active" data-tab="pricing" onclick="switchTab('pricing')">Pricing <span class="tab-count" id="pricingCount">0</span></div>
-    <div class="tab" data-tab="live" onclick="switchTab('live')">Live Quotes <span class="tab-count" id="liveCount">0</span></div>
+  <div class="stats" id="stats"></div>
+  <div class="filters">
+    <input type="text" id="search" placeholder="Search cards..." oninput="filterTable()">
+    <select id="clientFilter" onchange="filterTable()"><option value="">All clients</option></select>
+    <select id="assigneeFilter" onchange="filterTable()"><option value="">All assignees</option></select>
   </div>
-
-  <!-- Pricing Tab -->
-  <div class="tab-panel active" id="pricingPanel">
-    <div class="stats" id="stats"></div>
-    <div class="filters">
-      <input type="text" id="search" placeholder="Search cards..." oninput="filterTable()">
-      <select id="clientFilter" onchange="filterTable()"><option value="">All clients</option></select>
-      <select id="assigneeFilter" onchange="filterTable()"><option value="">All assignees</option></select>
-    </div>
-    <div id="error"></div>
-    <div id="content"><div class="loading">Loading quotes from Teamhood...</div></div>
-  </div>
-
-  <!-- Live Quotes Tab -->
-  <div class="tab-panel" id="livePanel">
-    <div class="stats" id="liveStats"></div>
-    <div class="filters">
-      <input type="text" id="liveSearch" placeholder="Search quotes..." oninput="filterLiveTable()">
-      <select id="liveClientFilter" onchange="filterLiveTable()"><option value="">All clients</option></select>
-    </div>
-    <div id="liveError"></div>
-    <div id="liveContent"><div class="loading">Click Refresh to load live quotes...</div></div>
-  </div>
+  <div id="error"></div>
+  <div id="content"><div class="loading">Loading quotes from Teamhood...</div></div>
 
   <script>
     let allQuotes = [];
-    let allLiveQuotes = [];
-    let currentTab = 'pricing';
-    let liveLoaded = false;
-
-    function switchTab(tab) {
-      currentTab = tab;
-      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-      document.getElementById('pricingPanel').classList.toggle('active', tab === 'pricing');
-      document.getElementById('livePanel').classList.toggle('active', tab === 'live');
-      if (tab === 'live' && !liveLoaded) loadLiveQuotes();
-    }
-
-    function refreshCurrentTab() {
-      if (currentTab === 'pricing') loadQuotes();
-      else { liveLoaded = false; loadLiveQuotes(); }
-    }
 
     async function loadQuotes() {
       const btn = document.getElementById('refreshBtn');
@@ -638,7 +590,6 @@ function pricingPage() {
         allQuotes = data.quotes;
         const elapsed = ((Date.now() - start) / 1000).toFixed(1);
         document.getElementById('loadTime').textContent = 'Loaded in ' + elapsed + 's';
-        document.getElementById('pricingCount').textContent = allQuotes.length;
         renderStats();
         populateFilters();
         renderTable();
@@ -695,9 +646,7 @@ function pricingPage() {
       return filtered;
     }
 
-    function filterTable() {
-      renderTable(getFilteredQuotes());
-    }
+    function filterTable() { renderTable(getFilteredQuotes()); }
 
     function toggleDetail(id) {
       const row = document.querySelector('.detail-row[data-id="' + id + '"]');
@@ -780,7 +729,6 @@ function pricingPage() {
         return html;
       }
 
-      // Desktop table
       let tableHtml = '<div class="desktop-table"><table><thead><tr>' +
         '<th></th><th>Card</th><th>Client</th><th>Site</th><th>Scope</th><th>Assignee</th>' +
         '<th>Keywords</th><th>Suggested</th><th>Top Match</th><th>Hours</th><th>Value</th><th></th>' +
@@ -806,7 +754,6 @@ function pricingPage() {
       }
       tableHtml += '</tbody></table></div>';
 
-      // Mobile cards
       let mobileHtml = '<div class="mobile-cards">';
       for (const q of list) {
         const d = cardData(q);
@@ -840,13 +787,9 @@ function pricingPage() {
       document.getElementById('content').innerHTML = tableHtml + mobileHtml;
     }
 
-    // Event delegation
     document.getElementById('content').addEventListener('click', function(e) {
       const approveBtn = e.target.closest('[data-approve]');
-      if (approveBtn) {
-        approveQuote(approveBtn.dataset.approve, approveBtn);
-        return;
-      }
+      if (approveBtn) { approveQuote(approveBtn.dataset.approve, approveBtn); return; }
       const toggleBtn = e.target.closest('[data-toggle]');
       if (toggleBtn) {
         const id = toggleBtn.dataset.toggle;
@@ -877,7 +820,79 @@ function pricingPage() {
       }
     });
 
-    // --- Live Quotes ---
+    loadQuotes();
+  </script>`;
+}
+
+// ---------------------------------------------------------------------------
+// Live Quotes page
+// ---------------------------------------------------------------------------
+
+function liveQuotesPage() {
+  return `
+  <style>
+    .pricing-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1.5px solid var(--sb); }
+    .btn-refresh { background: var(--o); color: var(--w); border: none; padding: 10px 20px; border-radius: 3px; cursor: pointer; font-size: 13px; font-weight: 700; font-family: inherit; transition: all 0.2s; }
+    .btn-refresh:hover { background: var(--od); transform: translateY(-1px); }
+    .btn-refresh:disabled { background: var(--sb); color: var(--mu); cursor: wait; }
+    .stats { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+    .stat { background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 14px 18px; min-width: 130px; }
+    .stat-value { font-size: 26px; font-weight: 800; color: var(--o); }
+    .stat-label { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--mu); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .filters { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+    .filters input, .filters select { background: var(--w); border: 1.5px solid var(--sb); color: var(--k); padding: 8px 12px; border-radius: 3px; font-size: 13px; font-family: inherit; }
+    .filters input:focus, .filters select:focus { outline: none; border-color: var(--o); }
+    .filters input { width: 250px; }
+    table { width: 100%; border-collapse: collapse; background: var(--w); border: 1.5px solid var(--sb); }
+    thead { background: var(--bg2); }
+    th { text-align: left; padding: 10px 14px; font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 500; color: var(--mu); text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1.5px solid var(--sb); }
+    td { padding: 10px 14px; border-bottom: 1px solid var(--sb); font-size: 13px; vertical-align: top; }
+    tr:hover { background: var(--ol); }
+    .load-time { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mu); margin-left: 12px; }
+    .live-status { display: inline-block; padding: 2px 8px; border-radius: 2px; font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
+    .live-status.sent { background: var(--ol); color: var(--o); }
+    .live-status.accepted { background: #e6f4ea; color: #2d8a3e; }
+    .btn-invoice { background: var(--k); color: var(--w); border: none; padding: 8px 16px; border-radius: 3px; cursor: pointer; font-size: 13px; font-weight: 700; font-family: inherit; transition: all 0.2s; }
+    .btn-invoice:hover { background: var(--s); transform: translateY(-1px); }
+    .btn-invoice:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
+    .btn-invoice.done { background: var(--o); cursor: default; }
+    .mobile-cards { display: none; }
+    .mobile-card { background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 14px; margin-bottom: 10px; }
+    .mobile-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+    .mobile-card-site { font-size: 14px; font-weight: 700; color: var(--k); margin-bottom: 4px; }
+    .mobile-card-scope { font-size: 12px; color: var(--s); margin-bottom: 8px; }
+    @media (max-width: 900px) {
+      .page { padding: 12px; }
+      h1 { font-size: 16px; }
+      .stats { gap: 8px; }
+      .stat { padding: 10px 14px; min-width: 80px; }
+      .stat-value { font-size: 20px; }
+      .filters input { width: 100%; }
+      .filters { flex-direction: column; gap: 8px; }
+      .filters select { width: 100%; }
+      .desktop-table { display: none; }
+      .mobile-cards { display: block; }
+    }
+  </style>
+
+  <div class="pricing-header">
+    <h1>Live Quotes</h1>
+    <div>
+      <span class="load-time" id="loadTime"></span>
+      <button class="btn-refresh" id="refreshBtn" onclick="loadLiveQuotes()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="stats" id="liveStats"></div>
+  <div class="filters">
+    <input type="text" id="liveSearch" placeholder="Search quotes..." oninput="filterLiveTable()">
+    <select id="liveClientFilter" onchange="filterLiveTable()"><option value="">All clients</option></select>
+  </div>
+  <div id="liveError"></div>
+  <div id="liveContent"><div class="loading">Loading live quotes from Zoho...</div></div>
+
+  <script>
+    let allLiveQuotes = [];
 
     async function loadLiveQuotes() {
       const btn = document.getElementById('refreshBtn');
@@ -891,10 +906,8 @@ function pricingPage() {
         const data = await res.json();
         if (!data.success) throw new Error(data.error);
         allLiveQuotes = data.quotes;
-        liveLoaded = true;
         const elapsed = ((Date.now() - start) / 1000).toFixed(1);
         document.getElementById('loadTime').textContent = 'Loaded in ' + elapsed + 's';
-        document.getElementById('liveCount').textContent = allLiveQuotes.length;
         renderLiveStats();
         populateLiveFilters();
         renderLiveTable();
@@ -952,7 +965,7 @@ function pricingPage() {
         '</tr></thead><tbody>';
 
       for (const q of list) {
-        tableHtml += '<tr class="live-row">' +
+        tableHtml += '<tr>' +
           '<td><strong>' + q.estimateNumber + '</strong></td>' +
           '<td>' + (q.date || '') + '</td>' +
           '<td>' + (q.customer || '') + '</td>' +
@@ -1000,7 +1013,6 @@ function pricingPage() {
         btn.classList.add('done');
         setTimeout(() => {
           allLiveQuotes = allLiveQuotes.filter(q => q.estimateId !== estimateId);
-          document.getElementById('liveCount').textContent = allLiveQuotes.length;
           renderLiveStats();
           renderLiveTable(getFilteredLiveQuotes());
         }, 1000);
@@ -1016,11 +1028,7 @@ function pricingPage() {
       if (invoiceBtn) markInvoiceReady(invoiceBtn.dataset.invoice, invoiceBtn);
     });
 
-    // Auto-switch tab from URL param
-    const _urlTab = new URLSearchParams(window.location.search).get('tab');
-    if (_urlTab === 'live') switchTab('live');
-
-    loadQuotes();
+    loadLiveQuotes();
   </script>`;
 }
 
