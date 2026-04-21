@@ -957,6 +957,13 @@ function liveQuotesPage() {
   <div class="stats" id="liveStats"></div>
   <div class="filters">
     <input type="text" id="liveSearch" placeholder="Search quotes..." oninput="filterLiveTable()">
+    <select id="liveSpFilter" onchange="filterLiveTable()">
+      <option value="">All salespersons</option>
+      <option value="Scaffold Design">Scaffold Design</option>
+      <option value="Powered Design">Powered Design</option>
+      <option value="Scaffold Design - Ireland">Scaffold Design - Ireland</option>
+      <option value="Powered Design - Ireland">Powered Design - Ireland</option>
+    </select>
     <select id="liveClientFilter" onchange="filterLiveTable()"><option value="">All clients</option></select>
   </div>
   <div id="liveError"></div>
@@ -1066,12 +1073,14 @@ function liveQuotesPage() {
 
     function getFilteredLiveQuotes() {
       const search = document.getElementById('liveSearch').value.toLowerCase();
+      const sp = document.getElementById('liveSpFilter').value;
       const client = document.getElementById('liveClientFilter').value;
       let filtered = allLiveQuotes.filter(q => {
         const text = (q.estimateNumber + ' ' + q.customer + ' ' + q.project + ' ' + q.reference).toLowerCase();
         const matchSearch = !search || text.includes(search);
+        const matchSp = !sp || q.salesperson === sp;
         const matchClient = !client || q.customer === client;
-        return matchSearch && matchClient;
+        return matchSearch && matchSp && matchClient;
       });
       filtered.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
       return filtered;
