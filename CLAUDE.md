@@ -113,7 +113,7 @@ OAuth2 refresh token flow (EU region: `zoho.eu`)
    - Parse title → client code → lookup in `client-identifiers.txt`
    - Search Zoho contacts by customer name → `customer_id`
    - Find or create Zoho project by site name
-   - Detect scaffold vs hoist template (hoist = "hoist" in title + "Hoist Spec/Scope" in description)
+   - Detect card type: CAT III first, then hoist, then scaffold (default)
    - Build line item description from template, populated with card data, fallback to reference quote
    - Set salesperson (UK or IE based on client code)
    - Set PO Number from Teamhood "Client Contact" custom field
@@ -122,6 +122,7 @@ OAuth2 refresh token flow (EU region: `zoho.eu`)
 ### Templates
 **Scaffold** — Title, Grid Lines, 3D Model, System, Load Class, Cladding, Ties, Length/Width/Height, Ancillaries
 **Hoist** — Title, Grid Lines, Max Height, 3D Model, Machine Type, Payload, Tie Type, Landings, Landing Type, Foundation, Ancillaries
+**CAT III** — Preamble ("CAT III check of external scaffold design..."), Drawing Number, Drawing Title
 
 ### Quote Matching
 - Text similarity (Jaccard-like word overlap) not just keywords
@@ -138,7 +139,7 @@ OAuth2 refresh token flow (EU region: `zoho.eu`)
 5. **Irish client codes**: LAO, MSL, GCS, AIN, 3SC, BHL, GAB, GRP → IE salesperson, Zero Rate VAT
 6. **Rates in half-hour increments** — all pricing based on hours × £85/hr
 7. **Teamhood PUT needs `{ data: {} }` envelope** — approve flow auto-removes "Price Required" tag
-8. **Line item name**: "- Design & Analysis (UK)", "- Design & Analysis (IE)", or "- Design & Analysis (Hoist)"
+8. **Line item name**: "- Design & Analysis (UK)", "- Design & Analysis (IE)", "- Design & Analysis (Hoist)", or "- CAT III Design Check"
 
 ## Environment Variables
 

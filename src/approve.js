@@ -94,6 +94,16 @@ Ancillaries:
 CAT II Check - Included`;
 
 /**
+ * Detect if a card is a CAT III design check.
+ * Matches "CAT III", "CAT3", "CAT 3" in title/scope (case-insensitive).
+ * Must be checked BEFORE hoist — some CAT III cards mention "hoist" in the title.
+ */
+function isCatIIICard(title, scope) {
+  const text = `${title} ${scope}`.toLowerCase();
+  return /cat\s*(?:iii|3)\b/.test(text);
+}
+
+/**
  * Detect if a card is a hoist design.
  * Must have "hoist" in the title/scope AND use the hoist template
  * (contains "Hoist Spec" or "Hoist Scope" in the card description).
@@ -369,11 +379,31 @@ ${ancValue}`;
 }
 
 /**
- * Build line item description using the appropriate template (scaffold or hoist).
+ * Build CAT III Design Check line item description.
+ * Much simpler than scaffold/hoist — just a preamble with drawing details.
+ */
+function buildCatIIIDescription(scope, cardText) {
+  // Try to extract drawing number from card text
+  const drawingMatch = cardText.match(/drawing\s*(?:number|ref|no\.?)?[\s:]*([A-Z0-9][\w\-\/]*)/i);
+  const drawingNumber = drawingMatch ? drawingMatch[1] : '';
+
+  return `CAT III check of external scaffold design, with production of full calculations and design report.
+
+Drawing Number: ${drawingNumber}
+Drawing Title: ${scope || ''}`;
+}
+
+/**
+ * Build line item description using the appropriate template (scaffold, hoist, or CAT III).
  * For each section: card data → reference fallback → all options.
  */
 function getLineItemDescription(scope, cardDescription, cardTitle, clientName) {
   const cardText = stripCardHtml(cardDescription);
+
+  if (isCatIIICard(cardTitle, scope)) {
+    return buildCatIIIDescription(scope, cardText);
+  }
+
   const refValues = getRefValues(cardTitle, scope, clientName);
   const hoist = isHoistCard(cardTitle, scope, cardDescription);
 
@@ -419,11 +449,14 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
   // 4. Extract Client Contact from Teamhood custom fields → Zoho PO Number
   const clientContact = (card.customFields || []).find(f => f.name === 'Client Contact')?.value || '';
 
-  // 5. Build line item — detect hoist vs scaffold, use correct template
-  const hoist = isHoistCard(card.title, parsed.scope, card.description);
+  // 5. Build line item — detect CAT III first, then hoist, then scaffold
+  const catIII = isCatIIICard(card.title, parsed.scope);
+  const hoist = !catIII && isHoistCard(card.title, parsed.scope, card.description);
   let lineItemName;
-  if (hoist) {
-    lineItemName = isIreland ? '- Design & Analysis (Hoist)' : '- Design & Analysis (Hoist)';
+  if (catIII) {
+    lineItemName = '- CAT III Design Check';
+  } else if (hoist) {
+    lineItemName = '- Design & Analysis (Hoist)';
   } else {
     lineItemName = isIreland ? '- Design & Analysis (IE)' : '- Design & Analysis (UK)';
   }
