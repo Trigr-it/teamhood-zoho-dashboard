@@ -880,7 +880,8 @@ function liveQuotesPage() {
     .detail-row { display: none; }
     .detail-row.open { display: table-row; }
     .detail-cell { background: var(--bg2); padding: 16px !important; font-size: 12px; color: var(--s); }
-    .detail-cell pre { white-space: pre-wrap; font-family: 'DM Mono', monospace; font-size: 11px; margin: 8px 0; padding: 10px; background: var(--w); border: 1px solid var(--sb); border-radius: 3px; }
+    .detail-cell pre { white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; max-width: 100%; font-family: 'DM Mono', monospace; font-size: 11px; margin: 8px 0; padding: 10px; background: var(--w); border: 1px solid var(--sb); border-radius: 3px; }
+    .mobile-card-detail pre { white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; max-width: calc(100vw - 60px); font-family: 'DM Mono', monospace; font-size: 10px; margin: 8px 0; padding: 8px; background: var(--w); border: 1px solid var(--sb); border-radius: 3px; }
     .li-header { font-weight: 700; color: var(--k); margin-bottom: 4px; }
     .li-meta { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mu); margin-bottom: 8px; }
     .mobile-cards { display: none; }
