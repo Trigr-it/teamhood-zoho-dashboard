@@ -116,13 +116,30 @@ function isHoistCard(title, scope, cardDescription) {
 }
 
 /**
- * Build a concise reference string: "Site Name - Short Scope Summary"
+ * Build a concise reference: "SiteName - 3-4 key scope words"
+ * e.g. "Woodbrook Northern Housing Area" + "Maber 2000 hoist access layout - Block M"
+ *    → "Woodbrook - Maber 2000 Block M"
  */
 function buildReference(siteName, scope) {
   if (!siteName) return scope || '';
-  // Truncate scope to a short summary (2-3 words)
-  const scopeWords = (scope || '').split(/\s+/).slice(0, 4).join(' ');
-  return `${siteName} - ${scopeWords}`.trim().replace(/\s*-\s*$/, '');
+  // Site: first word, but if it's short or a number, take first two words
+  const siteWords = siteName.split(/\s+/);
+  const shortSite = (!siteWords[0] || siteWords[0].length < 4 || /^\d+$/.test(siteWords[0]))
+    ? siteWords.slice(0, 2).join(' ')
+    : siteWords[0];
+  // Scope: drop generic scaffold/construction filler, keep up to 4 key words
+  const filler = new Set([
+    'the', 'a', 'an', 'and', 'of', 'to', 'for', 'in', 'on', 'at', 'with',
+    'scaffold', 'scaffolding', 'access', 'hoist', 'design', 'layout', 'check',
+    'external', 'perimeter', 'full', 'partial', 'temporary', 'needed',
+    'elevation', 'system', 'frame', 'support', 'cantilever',
+  ]);
+  const scopeWords = (scope || '').split(/[\s\-]+/)
+    .filter(w => w && !filler.has(w.toLowerCase()))
+    .slice(0, 4)
+    .join(' ');
+  if (!scopeWords) return shortSite;
+  return `${shortSite} - ${scopeWords}`;
 }
 
 /**
@@ -438,6 +455,16 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
   const customerId = contacts[0].contact_id;
   const customerName = contacts[0].contact_name;
 
+  // 2b. Get contact persons (email recipients) for this customer
+  let contactPersonIds = [];
+  try {
+    const contactDetail = await zohoRequest('GET', `/contacts/${customerId}`);
+    const persons = contactDetail.contact?.contact_persons || [];
+    contactPersonIds = persons.map(p => p.contact_person_id);
+  } catch (err) {
+    console.warn(`[approve] Could not fetch contact persons for ${customerName}:`, err.message);
+  }
+
   // 3. Find or create project
   let projectId = null;
   try {
@@ -471,6 +498,7 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
   // 7. Create draft estimate
   const estimateBody = {
     customer_id: customerId,
+    contact_persons: contactPersonIds,
     reference_number: reference,
     salesperson_id: salespersonId,
     custom_fields: clientContact ? [{ api_name: 'cf_po_number', value: clientContact }] : [],
