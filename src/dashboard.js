@@ -205,6 +205,20 @@ export function createDashboardRouter() {
     }
   });
 
+  // --- API: Decline an estimate ---
+  router.post('/api/live-quotes/:estimateId/decline', async (req, res) => {
+    try {
+      const { estimateId } = req.params;
+      const result = await zohoRequest('POST', `/estimates/${estimateId}/status/declined`);
+      if (result.code && result.code !== 0) {
+        throw new Error(result.message || JSON.stringify(result));
+      }
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // --- API: Dashboard summary (invoices from Zoho + quotes from reference DB) ---
   router.get('/api/dashboard/summary', async (req, res) => {
     try {
@@ -898,6 +912,8 @@ function liveQuotesPage() {
     .btn-invoice:hover { background: var(--s); transform: translateY(-1px); }
     .btn-invoice:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
     .btn-invoice.done { background: var(--o); cursor: default; }
+    .btn-decline { position: absolute; top: 4px; right: 4px; background: none; border: none; color: #cc3300; font-size: 16px; font-weight: 700; cursor: pointer; line-height: 1; padding: 2px 6px; border-radius: 3px; opacity: 0.5; transition: opacity 0.15s; }
+    .btn-decline:hover { opacity: 1; background: #fff0f0; }
     .sp-select { background: var(--w); border: 1.5px solid var(--sb); color: var(--k); padding: 4px 6px; border-radius: 3px; font-size: 11px; font-family: inherit; cursor: pointer; max-width: 140px; }
     .sp-select:focus { outline: none; border-color: var(--o); }
     .expand-btn { cursor: pointer; color: var(--o); font-size: 12px; font-weight: 700; }
@@ -981,6 +997,23 @@ function liveQuotesPage() {
         alert('Error: ' + err.message);
       } finally {
         selectEl.disabled = false;
+      }
+    }
+
+    async function declineQuote(estimateId) {
+      if (!confirm('Decline this quote? This will set the status to Declined on Zoho.')) return;
+      try {
+        const res = await fetch('/api/live-quotes/' + estimateId + '/decline', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        allLiveQuotes = allLiveQuotes.filter(q => q.estimateId !== estimateId);
+        renderLiveStats();
+        renderLiveTable(getFilteredLiveQuotes());
+      } catch (err) {
+        alert('Error: ' + err.message);
       }
     }
 
@@ -1077,7 +1110,7 @@ function liveQuotesPage() {
           '<td>' + spSelectHtml(q.estimateId, q.salespersonId) + '</td>' +
           '<td><strong>&pound;' + (q.subTotal || 0).toLocaleString() + '</strong></td>' +
           '<td style="color:var(--mu);">&pound;' + (q.total || 0).toLocaleString() + '</td>' +
-          '<td><button class="btn-invoice" data-invoice="' + q.estimateId + '">Ready for Invoice</button></td>' +
+          '<td style="position:relative;"><button class="btn-invoice" data-invoice="' + q.estimateId + '">Ready for Invoice</button><button class="btn-decline" data-decline="' + q.estimateId + '" title="Decline quote">&times;</button></td>' +
           '</tr>';
         tableHtml += '<tr class="detail-row" data-id="' + q.estimateId + '" style="display:none"><td colspan="11" class="detail-cell">' + detailHtml(q) + '</td></tr>';
       }
@@ -1096,7 +1129,7 @@ function liveQuotesPage() {
           '<div style="margin-top:6px;">' + spSelectHtml(q.estimateId, q.salespersonId) + '</div>' +
           '<span class="mobile-card-expand" data-toggle="' + q.estimateId + '">Show details</span>' +
           '<div class="mobile-card-detail" data-detail="' + q.estimateId + '">' + detailHtml(q) + '</div>' +
-          '<div style="margin-top:8px;"><button class="btn-invoice" data-invoice="' + q.estimateId + '" style="width:100%;">Ready for Invoice</button></div>' +
+          '<div style="margin-top:8px;display:flex;gap:8px;align-items:center;"><button class="btn-invoice" data-invoice="' + q.estimateId + '" style="flex:1;">Ready for Invoice</button><button class="btn-decline" data-decline="' + q.estimateId + '" style="position:static;opacity:1;font-size:20px;" title="Decline quote">&times;</button></div>' +
         '</div>';
       }
       mobileHtml += '</div>';
@@ -1143,6 +1176,8 @@ function liveQuotesPage() {
         }
         return;
       }
+      const declineBtn = e.target.closest('[data-decline]');
+      if (declineBtn) { declineQuote(declineBtn.dataset.decline); return; }
       const invoiceBtn = e.target.closest('[data-invoice]');
       if (invoiceBtn) markInvoiceReady(invoiceBtn.dataset.invoice, invoiceBtn);
     });
