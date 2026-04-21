@@ -460,7 +460,7 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
   try {
     const contactDetail = await zohoRequest('GET', `/contacts/${customerId}`);
     const persons = contactDetail.contact?.contact_persons || [];
-    contactPersonIds = persons.map(p => p.contact_person_id);
+    contactPersonIds = persons.filter(p => p.is_primary_contact).map(p => p.contact_person_id);
   } catch (err) {
     console.warn(`[approve] Could not fetch contact persons for ${customerName}:`, err.message);
   }
