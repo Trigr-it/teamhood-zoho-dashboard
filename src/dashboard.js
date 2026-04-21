@@ -150,7 +150,7 @@ export function createDashboardRouter() {
             total: est.total,
             subTotal: est.sub_total,
             lineItems: (est.line_items || []).map(li => ({
-              name: li.name, quantity: li.quantity, rate: li.rate, total: li.item_total,
+              name: li.name, description: li.description || '', quantity: li.quantity, rate: li.rate, total: li.item_total,
             })),
           });
         }
@@ -876,11 +876,21 @@ function liveQuotesPage() {
     .btn-invoice:hover { background: var(--s); transform: translateY(-1px); }
     .btn-invoice:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
     .btn-invoice.done { background: var(--o); cursor: default; }
+    .expand-btn { cursor: pointer; color: var(--o); font-size: 12px; font-weight: 700; }
+    .detail-row { display: none; }
+    .detail-row.open { display: table-row; }
+    .detail-cell { background: var(--bg2); padding: 16px !important; font-size: 12px; color: var(--s); }
+    .detail-cell pre { white-space: pre-wrap; font-family: 'DM Mono', monospace; font-size: 11px; margin: 8px 0; padding: 10px; background: var(--w); border: 1px solid var(--sb); border-radius: 3px; }
+    .li-header { font-weight: 700; color: var(--k); margin-bottom: 4px; }
+    .li-meta { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mu); margin-bottom: 8px; }
     .mobile-cards { display: none; }
     .mobile-card { background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 14px; margin-bottom: 10px; }
     .mobile-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
     .mobile-card-site { font-size: 14px; font-weight: 700; color: var(--k); margin-bottom: 4px; }
     .mobile-card-scope { font-size: 12px; color: var(--s); margin-bottom: 8px; }
+    .mobile-card-detail { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--sb); font-size: 11px; color: var(--s); display: none; }
+    .mobile-card-detail.open { display: block; }
+    .mobile-card-expand { color: var(--o); font-size: 12px; font-weight: 700; cursor: pointer; display: inline-block; margin-top: 6px; }
     @media (max-width: 900px) {
       .page { padding: 12px; }
       h1 { font-size: 16px; }
@@ -976,16 +986,29 @@ function liveQuotesPage() {
 
     function filterLiveTable() { renderLiveTable(getFilteredLiveQuotes()); }
 
+    function detailHtml(q) {
+      let html = '';
+      for (const li of (q.lineItems || [])) {
+        html += '<div class="li-header">' + (li.name || '') + '</div>';
+        html += '<div class="li-meta">Qty: ' + li.quantity + ' &times; &pound;' + (li.rate || 0).toLocaleString() + ' = &pound;' + (li.total || 0).toLocaleString() + '</div>';
+        if (li.description) html += '<pre>' + li.description + '</pre>';
+      }
+      if (!q.lineItems?.length) html = '<em>No line items</em>';
+      html += '<div style="margin-top:8px;"><strong>Salesperson:</strong> ' + (q.salesperson || '-') + '</div>';
+      return html;
+    }
+
     function renderLiveTable(quotes) {
       const list = quotes || [...allLiveQuotes].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
       let tableHtml = '<div class="desktop-table"><table><thead><tr>' +
-        '<th>Quote</th><th>Date</th><th>Client</th><th>Project</th><th>Reference</th>' +
+        '<th></th><th>Quote</th><th>Date</th><th>Client</th><th>Project</th><th>Reference</th>' +
         '<th>Status</th><th>Sub Total</th><th>Total (inc. VAT)</th><th></th>' +
         '</tr></thead><tbody>';
 
       for (const q of list) {
         tableHtml += '<tr>' +
+          '<td><span class="expand-btn" data-toggle="' + q.estimateId + '">+</span></td>' +
           '<td><strong>' + q.estimateNumber + '</strong></td>' +
           '<td>' + (q.date || '') + '</td>' +
           '<td>' + (q.customer || '') + '</td>' +
@@ -996,6 +1019,7 @@ function liveQuotesPage() {
           '<td style="color:var(--mu);">&pound;' + (q.total || 0).toLocaleString() + '</td>' +
           '<td><button class="btn-invoice" data-invoice="' + q.estimateId + '">Ready for Invoice</button></td>' +
           '</tr>';
+        tableHtml += '<tr class="detail-row" data-id="' + q.estimateId + '" style="display:none"><td colspan="10" class="detail-cell">' + detailHtml(q) + '</td></tr>';
       }
       tableHtml += '</tbody></table></div>';
 
@@ -1009,6 +1033,8 @@ function liveQuotesPage() {
           '<div style="font-size:11px;color:var(--mu);">Total inc. VAT: &pound;' + (q.total || 0).toLocaleString() + ' &mdash; ' + (q.date || '') + '</div>' +
           '<div class="mobile-card-site">' + (q.customer || '') + '</div>' +
           '<div class="mobile-card-scope">' + (q.project || '') + (q.reference ? ' &mdash; ' + q.reference : '') + '</div>' +
+          '<span class="mobile-card-expand" data-toggle="' + q.estimateId + '">Show details</span>' +
+          '<div class="mobile-card-detail" data-detail="' + q.estimateId + '">' + detailHtml(q) + '</div>' +
           '<div style="margin-top:8px;"><button class="btn-invoice" data-invoice="' + q.estimateId + '" style="width:100%;">Ready for Invoice</button></div>' +
         '</div>';
       }
@@ -1044,6 +1070,18 @@ function liveQuotesPage() {
     }
 
     document.getElementById('liveContent').addEventListener('click', function(e) {
+      const toggleBtn = e.target.closest('[data-toggle]');
+      if (toggleBtn) {
+        const id = toggleBtn.dataset.toggle;
+        const row = document.querySelector('.detail-row[data-id="' + id + '"]');
+        if (row) { row.classList.toggle('open'); row.style.display = row.classList.contains('open') ? '' : 'none'; }
+        const mobileDetail = document.querySelector('.mobile-card-detail[data-detail="' + id + '"]');
+        if (mobileDetail) {
+          mobileDetail.classList.toggle('open');
+          toggleBtn.textContent = mobileDetail.classList.contains('open') ? 'Hide details' : 'Show details';
+        }
+        return;
+      }
       const invoiceBtn = e.target.closest('[data-invoice]');
       if (invoiceBtn) markInvoiceReady(invoiceBtn.dataset.invoice, invoiceBtn);
     });
