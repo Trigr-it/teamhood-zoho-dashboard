@@ -146,6 +146,7 @@ export function createDashboardRouter() {
             project: est.project?.project_name || '',
             reference: est.reference_number || '',
             salesperson: est.salesperson_name || '',
+            salespersonId: est.salesperson_id || '',
             invoiceStatus,
             total: est.total,
             subTotal: est.sub_total,
@@ -177,6 +178,27 @@ export function createDashboardRouter() {
         success: true,
         estimateNumber: result.estimate?.estimate_number,
         message: 'Marked as ready for invoice',
+      });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- API: Update salesperson on an estimate ---
+  router.post('/api/live-quotes/:estimateId/salesperson', async (req, res) => {
+    try {
+      const { estimateId } = req.params;
+      const { salesperson_id } = req.body;
+      if (!salesperson_id) throw new Error('salesperson_id is required');
+      const result = await zohoRequest('PUT', `/estimates/${estimateId}`, {
+        salesperson_id,
+      });
+      if (result.code && result.code !== 0) {
+        throw new Error(result.message || JSON.stringify(result));
+      }
+      res.json({
+        success: true,
+        salesperson: result.estimate?.salesperson_name || '',
       });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -876,6 +898,8 @@ function liveQuotesPage() {
     .btn-invoice:hover { background: var(--s); transform: translateY(-1px); }
     .btn-invoice:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
     .btn-invoice.done { background: var(--o); cursor: default; }
+    .sp-select { background: var(--w); border: 1.5px solid var(--sb); color: var(--k); padding: 4px 6px; border-radius: 3px; font-size: 11px; font-family: inherit; cursor: pointer; max-width: 140px; }
+    .sp-select:focus { outline: none; border-color: var(--o); }
     .expand-btn { cursor: pointer; color: var(--o); font-size: 12px; font-weight: 700; }
     .detail-row { display: none; }
     .detail-row.open { display: table-row; }
@@ -924,6 +948,41 @@ function liveQuotesPage() {
 
   <script>
     let allLiveQuotes = [];
+    const SALESPERSONS = [
+      { id: '70776000004849675', name: 'Scaffold Design' },
+      { id: '70776000004849677', name: 'Powered Design' },
+      { id: '70776000004920001', name: 'Scaffold Design - Ireland' },
+      { id: '70776000005368119', name: 'Powered Design - Ireland' },
+    ];
+
+    function spSelectHtml(estimateId, currentId) {
+      let html = '<select class="sp-select" data-sp="' + estimateId + '">';
+      for (const sp of SALESPERSONS) {
+        html += '<option value="' + sp.id + '"' + (sp.id === currentId ? ' selected' : '') + '>' + sp.name + '</option>';
+      }
+      html += '</select>';
+      return html;
+    }
+
+    async function changeSalesperson(estimateId, selectEl) {
+      const spId = selectEl.value;
+      selectEl.disabled = true;
+      try {
+        const res = await fetch('/api/live-quotes/' + estimateId + '/salesperson', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ salesperson_id: spId }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        const q = allLiveQuotes.find(q => q.estimateId === estimateId);
+        if (q) { q.salesperson = data.salesperson; q.salespersonId = spId; }
+      } catch (err) {
+        alert('Error: ' + err.message);
+      } finally {
+        selectEl.disabled = false;
+      }
+    }
 
     async function loadLiveQuotes() {
       const btn = document.getElementById('refreshBtn');
@@ -995,7 +1054,6 @@ function liveQuotesPage() {
         if (li.description) html += '<pre>' + li.description + '</pre>';
       }
       if (!q.lineItems?.length) html = '<em>No line items</em>';
-      html += '<div style="margin-top:8px;"><strong>Salesperson:</strong> ' + (q.salesperson || '-') + '</div>';
       return html;
     }
 
@@ -1004,7 +1062,7 @@ function liveQuotesPage() {
 
       let tableHtml = '<div class="desktop-table"><table><thead><tr>' +
         '<th></th><th>Quote</th><th>Date</th><th>Client</th><th>Project</th><th>Reference</th>' +
-        '<th>Status</th><th>Sub Total</th><th>Total (inc. VAT)</th><th></th>' +
+        '<th>Status</th><th>Salesperson</th><th>Sub Total</th><th>Total (inc. VAT)</th><th></th>' +
         '</tr></thead><tbody>';
 
       for (const q of list) {
@@ -1016,11 +1074,12 @@ function liveQuotesPage() {
           '<td>' + (q.project || '') + '</td>' +
           '<td>' + (q.reference || '') + '</td>' +
           '<td><span class="live-status ' + q.status + '">' + q.status + '</span></td>' +
+          '<td>' + spSelectHtml(q.estimateId, q.salespersonId) + '</td>' +
           '<td><strong>&pound;' + (q.subTotal || 0).toLocaleString() + '</strong></td>' +
           '<td style="color:var(--mu);">&pound;' + (q.total || 0).toLocaleString() + '</td>' +
           '<td><button class="btn-invoice" data-invoice="' + q.estimateId + '">Ready for Invoice</button></td>' +
           '</tr>';
-        tableHtml += '<tr class="detail-row" data-id="' + q.estimateId + '" style="display:none"><td colspan="10" class="detail-cell">' + detailHtml(q) + '</td></tr>';
+        tableHtml += '<tr class="detail-row" data-id="' + q.estimateId + '" style="display:none"><td colspan="11" class="detail-cell">' + detailHtml(q) + '</td></tr>';
       }
       tableHtml += '</tbody></table></div>';
 
@@ -1034,6 +1093,7 @@ function liveQuotesPage() {
           '<div style="font-size:11px;color:var(--mu);">Total inc. VAT: &pound;' + (q.total || 0).toLocaleString() + ' &mdash; ' + (q.date || '') + '</div>' +
           '<div class="mobile-card-site">' + (q.customer || '') + '</div>' +
           '<div class="mobile-card-scope">' + (q.project || '') + (q.reference ? ' &mdash; ' + q.reference : '') + '</div>' +
+          '<div style="margin-top:6px;">' + spSelectHtml(q.estimateId, q.salespersonId) + '</div>' +
           '<span class="mobile-card-expand" data-toggle="' + q.estimateId + '">Show details</span>' +
           '<div class="mobile-card-detail" data-detail="' + q.estimateId + '">' + detailHtml(q) + '</div>' +
           '<div style="margin-top:8px;"><button class="btn-invoice" data-invoice="' + q.estimateId + '" style="width:100%;">Ready for Invoice</button></div>' +
@@ -1085,6 +1145,11 @@ function liveQuotesPage() {
       }
       const invoiceBtn = e.target.closest('[data-invoice]');
       if (invoiceBtn) markInvoiceReady(invoiceBtn.dataset.invoice, invoiceBtn);
+    });
+
+    document.getElementById('liveContent').addEventListener('change', function(e) {
+      const spSelect = e.target.closest('[data-sp]');
+      if (spSelect) changeSalesperson(spSelect.dataset.sp, spSelect);
     });
 
     loadLiveQuotes();
