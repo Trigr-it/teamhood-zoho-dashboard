@@ -573,9 +573,11 @@ function pricingPage() {
     .btn-approve:hover { background: var(--od); transform: translateY(-1px); }
     .btn-approve:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
     .btn-approve.approved { background: var(--s); cursor: default; }
-    .btn-done { position: absolute; top: 4px; right: 4px; background: none; border: none; color: #cc3300; font-size: 16px; font-weight: 700; cursor: pointer; line-height: 1; padding: 2px 6px; border-radius: 3px; opacity: 0.4; transition: opacity 0.15s; }
-    .btn-done:hover { opacity: 1; background: #fff0f0; }
-    .btn-done:disabled { opacity: 0.2; cursor: not-allowed; }
+    .btn-done { background: var(--bg2); color: var(--s); border: 1.5px solid var(--sb); padding: 6px 12px; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600; font-family: inherit; transition: all 0.2s; margin-top: 4px; display: block; width: 100%; }
+    .btn-done:hover { background: var(--sb); color: var(--k); }
+    .btn-done:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
+    .btn-done-x { position: absolute; top: 4px; right: 4px; background: none; border: none; color: #cc3300; font-size: 16px; font-weight: 700; cursor: pointer; line-height: 1; padding: 2px 6px; border-radius: 3px; opacity: 0.4; transition: opacity 0.15s; }
+    .btn-done-x:hover { opacity: 1; background: #fff0f0; }
     .mobile-card { position: relative; }
     .btn-show-details { background: var(--bg2); color: var(--s); border: 1.5px solid var(--sb); padding: 8px; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: inherit; transition: all 0.2s; display: block; width: 100%; text-align: center; margin-top: 8px; }
     .btn-show-details:hover { background: var(--sb); color: var(--k); }
@@ -874,7 +876,7 @@ function pricingPage() {
           '<td class="match">' + d.matchDisplay + '<br>' + d.matchScoreDisplay + '</td>' +
           '<td><input type="number" class="hours-input" id="hours-' + q.id + '" value="' + d.defaultHours + '" min="0" step="0.5" style="width:60px"> <span class="rate-value" id="value-' + q.id + '">&pound;' + d.defaultRate + '</span></td>' +
           '<td></td>' +
-          '<td style="position:relative;"><button class="btn-approve" data-approve="' + q.id + '">Approve</button><button class="btn-done" data-done="' + q.id + '" title="Done (remove tag)">&times;</button></td>' +
+          '<td><button class="btn-approve" data-approve="' + q.id + '">Approve</button><button class="btn-done" data-done="' + q.id + '">Done</button></td>' +
           '</tr>';
         tableHtml += '<tr class="detail-row" data-id="' + q.id + '" style="display:none"><td colspan="13" class="detail-cell">' + detailHtml(q) + '</td></tr>';
       }
@@ -884,7 +886,7 @@ function pricingPage() {
       for (const q of list) {
         const d = cardData(q);
         mobileHtml += '<div class="mobile-card" data-id="' + q.id + '">' +
-          '<button class="btn-done" data-done="' + q.id + '" title="Done (remove tag)">&times;</button>' +
+          '<button class="btn-done-x" data-done="' + q.id + '" title="Done (remove tag)">&times;</button>' +
           '<div class="mobile-card-header">' +
             '<div><span class="mobile-card-id"><a href="' + (q.url || '#') + '" target="_blank">' + (q.displayId || '') + '</a></span> ' +
             '<span class="mobile-card-client">' + d.clientDisplay + '</span></div>' +
