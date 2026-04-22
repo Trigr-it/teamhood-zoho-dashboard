@@ -42,27 +42,11 @@ export function createDashboardRouter() {
         return !(parsed.clientCode && EXCLUDED_CLIENT_CODES.has(parsed.clientCode));
       });
 
-      // Fetch attachments in parallel batches of 5
-      const attachmentMap = {};
-      for (let i = 0; i < filtered.length; i += 5) {
-        const batch = filtered.slice(i, i + 5);
-        const results = await Promise.all(batch.map(async card => {
-          try {
-            const atts = await api.getCardAttachments(card.id);
-            return { id: card.id, attachments: atts };
-          } catch { return { id: card.id, attachments: [] }; }
-        }));
-        for (const r of results) attachmentMap[r.id] = r.attachments;
-      }
-
       const result = filtered
         .map(card => {
           const parsed = parseCardTitle(card.title);
           const client = lookupClient(parsed.clientCode);
           const pricing = findSimilarQuotes(card.title, parsed.scope, client?.customerName, 5);
-          const atts = (attachmentMap[card.id] || []).map(a => ({
-            id: a.id, name: a.name, mimeType: a.mimeType || '', size: a.size || 0,
-          }));
           return {
             id: card.id,
             displayId: card.displayId,
@@ -90,7 +74,6 @@ export function createDashboardRouter() {
               isClientMatch: sq.isClientMatch,
               date: sq.date,
             })),
-            attachments: atts,
             siteVisit: (card.customFields || []).some(f => f.name === 'Site Visit' && f.value === 'true'),
             customFields: card.customFields,
             url: card.url,
@@ -102,6 +85,18 @@ export function createDashboardRouter() {
       res.json({ success: true, quotes: result });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- API: Get attachments for a card (lazy-loaded) ---
+  router.get('/api/cards/:cardId/attachments', async (req, res) => {
+    try {
+      const atts = await api.getCardAttachments(req.params.cardId);
+      res.json({ success: true, attachments: atts.map(a => ({
+        id: a.id, name: a.name, mimeType: a.mimeType || '', size: a.size || 0,
+      })) });
+    } catch (err) {
+      res.json({ success: true, attachments: [] });
     }
   });
 
@@ -798,20 +793,8 @@ function pricingPage() {
         if (q.description) {
           html += '<div class="detail-desc"><strong>Description:</strong><div class="detail-desc-text">' + q.description + '</div></div>';
         }
-        // Attachments
-        if (q.attachments && q.attachments.length > 0) {
-          html += '<div class="detail-atts"><strong>Attachments:</strong><div class="detail-atts-grid">';
-          for (const a of q.attachments) {
-            const isImage = a.mimeType.startsWith('image/');
-            if (isImage) {
-              html += '<a href="/api/attachments/' + a.id + '" target="_blank" title="' + a.name + '" class="att-thumb"><img src="/api/attachments/' + a.id + '" alt="' + a.name + '"></a>';
-            } else {
-              const icon = a.mimeType === 'application/pdf' ? 'PDF' : 'FILE';
-              html += '<a href="/api/attachments/' + a.id + '" target="_blank" class="att-file"><span class="att-icon">' + icon + '</span>' + a.name.substring(0, 25) + (a.name.length > 25 ? '...' : '') + '</a>';
-            }
-          }
-          html += '</div></div>';
-        }
+        // Attachments placeholder (lazy-loaded on expand)
+        html += '<div class="detail-atts" id="atts-' + q.id + '"><strong>Attachments:</strong> <span style="color:var(--mu);font-size:11px;">Loading...</span></div>';
         // Custom fields
         html += '<strong>Custom Fields:</strong> ' + (q.customFields || []).filter(f => f.value).map(f => f.name + ': ' + f.value).join(' | ');
         if (q.suggestedRate?.hours) {
