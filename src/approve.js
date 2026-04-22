@@ -18,6 +18,15 @@ const SALESPERSON = {
 // Irish client codes (use IE salesperson + no VAT)
 const IE_CLIENT_CODES = new Set(['LAO', 'MSL', 'GCS', 'AIN', '3SC', 'BHL', 'GAB', 'GRP']);
 
+// Site Visit line item (added when Teamhood "Site Visit" checkbox is ticked)
+const SITE_VISIT_ITEM = {
+  item_id: '70776000000030113',
+  name: '- Site Visit',
+  description: 'Design Engineer to attend site visit or meeting.',
+  rate: 200,
+  quantity: 1,
+};
+
 // Line item description template (blank — to be filled in by the designer)
 const UK_DESCRIPTION_TEMPLATE = `Title:
 Grid Lines:
@@ -473,8 +482,9 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
     console.warn(`[approve] Project lookup/create failed for "${parsed.siteName}":`, err.message);
   }
 
-  // 4. Extract Client Contact from Teamhood custom fields → Zoho PO Number
+  // 4. Extract custom fields from Teamhood
   const clientContact = (card.customFields || []).find(f => f.name === 'Client Contact')?.value || '';
+  const siteVisit = (card.customFields || []).find(f => f.name === 'Site Visit')?.value === 'true';
 
   // 5. Build line item — detect CAT III first, then hoist, then scaffold
   const catIII = isCatIIICard(card.title, parsed.scope);
@@ -496,19 +506,33 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
   const salespersonId = isIreland ? SALESPERSON.IE : SALESPERSON.UK;
 
   // 7. Create draft estimate
+  const lineItems = [{
+    name: lineItemName,
+    description: lineItemDescription,
+    quantity,
+    rate: rate || 0,
+    tax_id: isIreland ? ZERO_TAX_ID : DEFAULT_TAX_ID,
+  }];
+
+  // Add site visit line item if checkbox is ticked
+  if (siteVisit) {
+    lineItems.push({
+      item_id: SITE_VISIT_ITEM.item_id,
+      name: SITE_VISIT_ITEM.name,
+      description: SITE_VISIT_ITEM.description,
+      rate: SITE_VISIT_ITEM.rate,
+      quantity: SITE_VISIT_ITEM.quantity,
+      tax_id: isIreland ? ZERO_TAX_ID : DEFAULT_TAX_ID,
+    });
+  }
+
   const estimateBody = {
     customer_id: customerId,
     contact_persons: contactPersonIds,
     reference_number: reference,
     salesperson_id: salespersonId,
     custom_fields: clientContact ? [{ api_name: 'cf_po_number', value: clientContact }] : [],
-    line_items: [{
-      name: lineItemName,
-      description: lineItemDescription,
-      quantity,
-      rate: rate || 0,
-      tax_id: isIreland ? ZERO_TAX_ID : DEFAULT_TAX_ID,
-    }],
+    line_items: lineItems,
   };
 
   if (projectId) estimateBody.project_id = projectId;

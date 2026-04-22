@@ -91,6 +91,7 @@ export function createDashboardRouter() {
               date: sq.date,
             })),
             attachments: atts,
+            siteVisit: (card.customFields || []).some(f => f.name === 'Site Visit' && f.value === 'true'),
             customFields: card.customFields,
             url: card.url,
             updatedAt: card.updatedAt,
@@ -780,7 +781,8 @@ function pricingPage() {
         const match = q.topMatch;
         const matchDisplay = match ? match.estimateNumber + ' &pound;' + match.total : '-';
         const matchScoreDisplay = match ? '<span class="match-score">' + match.matchScore + '</span>' : '';
-        const kwDisplay = (q.matchedKeywords || []).map(k => '<span class="tag">' + k + '</span>').join(' ');
+        const svTag = q.siteVisit ? '<span class="tag" style="background:#e6f4ea;color:#2d8a3e;">Site Visit</span> ' : '';
+        const kwDisplay = svTag + (q.matchedKeywords || []).map(k => '<span class="tag">' + k + '</span>').join(' ');
         const clientDisplay = q.zohoCustomerName
           ? '<span class="client-code">' + q.clientCode + '</span> ' + q.zohoCustomerName
           : '<span class="client-code">' + (q.clientCode || '?') + '</span> <span class="unmapped">unmapped</span>';
