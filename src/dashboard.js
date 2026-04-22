@@ -576,8 +576,8 @@ function pricingPage() {
     .btn-done { background: var(--bg2); color: var(--s); border: 1.5px solid var(--sb); padding: 6px 12px; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600; font-family: inherit; transition: all 0.2s; margin-top: 4px; display: block; width: 100%; }
     .btn-done:hover { background: var(--sb); color: var(--k); }
     .btn-done:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
-    .btn-done-x { position: absolute; top: 4px; right: 4px; background: none; border: none; color: #cc3300; font-size: 16px; font-weight: 700; cursor: pointer; line-height: 1; padding: 2px 6px; border-radius: 3px; opacity: 0.4; transition: opacity 0.15s; }
-    .btn-done-x:hover { opacity: 1; background: #fff0f0; }
+    .btn-done-x { position: absolute; top: 0; right: 0; background: #cc3300; border: none; color: #fff; font-size: 14px; font-weight: 700; cursor: pointer; line-height: 1; padding: 0; width: 24px; height: 24px; border-radius: 0 3px 0 3px; display: flex; align-items: center; justify-content: center; transition: background 0.15s; }
+    .btn-done-x:hover { background: #a32800; }
     .mobile-card { position: relative; }
     .btn-show-details { background: var(--bg2); color: var(--s); border: 1.5px solid var(--sb); padding: 8px; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: inherit; transition: all 0.2s; display: block; width: 100%; text-align: center; margin-top: 8px; }
     .btn-show-details:hover { background: var(--sb); color: var(--k); }
