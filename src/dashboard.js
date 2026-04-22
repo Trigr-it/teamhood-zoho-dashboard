@@ -597,10 +597,17 @@ function pricingPage() {
     .mobile-card-suggested { text-align: left; }
     .mobile-card-suggested .rate { font-size: 16px; }
     .mobile-card-match { text-align: right; font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mu); }
-    .mobile-card-actions { display: flex; gap: 8px; align-items: center; }
-    .mobile-card-actions .hours-input { flex: 0 0 60px; }
+    .mobile-card-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .mobile-card-actions .hours-input { flex: 0 0 50px; }
     .mobile-card-actions .rate-value { flex: 0 0 60px; text-align: right; }
     .mobile-card-actions .btn-approve { flex: 1; }
+    .hours-stepper { display: none; align-items: center; gap: 0; }
+    .hours-stepper .hours-input { border-radius: 0; border-left: none; border-right: none; text-align: center; width: 50px; }
+    .btn-step { background: var(--bg2); border: 1.5px solid var(--sb); color: var(--k); width: 32px; height: 32px; font-size: 18px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; font-family: inherit; transition: background 0.15s; }
+    .btn-step:hover { background: var(--sb); }
+    .btn-step:first-child { border-radius: 3px 0 0 3px; }
+    .btn-step:last-child { border-radius: 0 3px 3px 0; }
+    @media (max-width: 900px) { .hours-stepper { display: flex; } }
     .detail-desc { margin-bottom: 12px; }
     .detail-desc-text { white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; font-size: 12px; color: var(--s); margin-top: 4px; padding: 8px; background: var(--w); border: 1px solid var(--sb); border-radius: 3px; max-height: 200px; overflow-y: auto; }
     .detail-atts { margin-bottom: 12px; }
@@ -859,7 +866,11 @@ function pricingPage() {
           '</div>' +
           '<div class="mobile-card-tags">' + d.kwDisplay + '</div>' +
           '<div class="mobile-card-actions">' +
-            '<input type="number" class="hours-input" id="m-hours-' + q.id + '" value="' + d.defaultHours + '" min="0" step="0.5">' +
+            '<div class="hours-stepper">' +
+              '<button class="btn-step" data-step="-0.5" data-for="m-hours-' + q.id + '">-</button>' +
+              '<input type="number" class="hours-input" id="m-hours-' + q.id + '" value="' + d.defaultHours + '" min="0" step="0.5">' +
+              '<button class="btn-step" data-step="0.5" data-for="m-hours-' + q.id + '">+</button>' +
+            '</div>' +
             '<span class="rate-value" id="m-value-' + q.id + '">&pound;' + d.defaultRate + '</span>' +
             '<button class="btn-approve" data-approve="' + q.id + '">Approve</button>' +
             '<button class="btn-done" data-done="' + q.id + '">Done</button>' +
@@ -895,6 +906,18 @@ function pricingPage() {
     }
 
     document.getElementById('content').addEventListener('click', function(e) {
+      const stepBtn = e.target.closest('[data-step]');
+      if (stepBtn) {
+        const input = document.getElementById(stepBtn.dataset.for);
+        if (input) {
+          const cur = parseFloat(input.value) || 0;
+          const step = parseFloat(stepBtn.dataset.step);
+          const next = Math.max(0, cur + step);
+          input.value = next.toFixed(1);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        return;
+      }
       const approveBtn = e.target.closest('[data-approve]');
       if (approveBtn) { approveQuote(approveBtn.dataset.approve, approveBtn); return; }
       const doneBtn = e.target.closest('[data-done]');
