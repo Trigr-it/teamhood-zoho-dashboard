@@ -605,8 +605,19 @@ function pricingPage() {
     .mobile-card-actions .hours-input { flex: 0 0 60px; }
     .mobile-card-actions .rate-value { flex: 0 0 60px; text-align: right; }
     .mobile-card-actions .btn-approve { flex: 1; }
-    .mobile-card-detail { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--sb); font-size: 11px; color: var(--s); display: none; }
+    .detail-desc { margin-bottom: 12px; }
+    .detail-desc-text { white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word; font-size: 12px; color: var(--s); margin-top: 4px; padding: 8px; background: var(--w); border: 1px solid var(--sb); border-radius: 3px; max-height: 200px; overflow-y: auto; }
+    .detail-atts { margin-bottom: 12px; }
+    .detail-atts-grid { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+    .att-thumb img { max-width: 120px; max-height: 90px; border: 1px solid var(--sb); border-radius: 3px; object-fit: cover; display: block; }
+    .att-file { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--w); border: 1px solid var(--sb); border-radius: 3px; font-size: 11px; color: var(--s); text-decoration: none; }
+    .att-icon { font-weight: 700; color: var(--o); }
+    .mobile-card-detail { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--sb); font-size: 11px; color: var(--s); display: none; overflow: hidden; }
     .mobile-card-detail.open { display: block; }
+    .mobile-card-detail .detail-desc-text { font-size: 11px; max-height: 150px; }
+    .mobile-card-detail .att-thumb img { max-width: 80px; max-height: 60px; }
+    .mobile-card-detail .att-file { font-size: 10px; padding: 4px 8px; }
+    .mobile-card-detail .detail-atts-grid { gap: 6px; }
     .mobile-card-tags { margin: 6px 0; }
     .mobile-card-assignee { color: var(--s); font-size: 12px; font-weight: 600; }
     .mobile-card-expand { color: var(--o); font-size: 12px; font-weight: 700; cursor: pointer; display: inline-block; margin-top: 6px; }
@@ -783,18 +794,18 @@ function pricingPage() {
         let html = '';
         // Description
         if (q.description) {
-          html += '<div style="margin-bottom:12px;"><strong>Description:</strong><div style="white-space:pre-wrap;font-size:12px;color:var(--s);margin-top:4px;padding:8px;background:var(--w);border:1px solid var(--sb);border-radius:3px;max-height:200px;overflow-y:auto;">' + q.description + '</div></div>';
+          html += '<div class="detail-desc"><strong>Description:</strong><div class="detail-desc-text">' + q.description + '</div></div>';
         }
         // Attachments
         if (q.attachments && q.attachments.length > 0) {
-          html += '<div style="margin-bottom:12px;"><strong>Attachments:</strong><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">';
+          html += '<div class="detail-atts"><strong>Attachments:</strong><div class="detail-atts-grid">';
           for (const a of q.attachments) {
             const isImage = a.mimeType.startsWith('image/');
             if (isImage) {
-              html += '<a href="/api/attachments/' + a.id + '" target="_blank" title="' + a.name + '"><img src="/api/attachments/' + a.id + '" style="max-width:120px;max-height:90px;border:1px solid var(--sb);border-radius:3px;object-fit:cover;"></a>';
+              html += '<a href="/api/attachments/' + a.id + '" target="_blank" title="' + a.name + '" class="att-thumb"><img src="/api/attachments/' + a.id + '" alt="' + a.name + '"></a>';
             } else {
               const icon = a.mimeType === 'application/pdf' ? 'PDF' : 'FILE';
-              html += '<a href="/api/attachments/' + a.id + '" target="_blank" style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--w);border:1px solid var(--sb);border-radius:3px;font-size:11px;color:var(--s);text-decoration:none;"><span style="font-weight:700;color:var(--o);">' + icon + '</span>' + a.name.substring(0, 30) + (a.name.length > 30 ? '...' : '') + '</a>';
+              html += '<a href="/api/attachments/' + a.id + '" target="_blank" class="att-file"><span class="att-icon">' + icon + '</span>' + a.name.substring(0, 25) + (a.name.length > 25 ? '...' : '') + '</a>';
             }
           }
           html += '</div></div>';
