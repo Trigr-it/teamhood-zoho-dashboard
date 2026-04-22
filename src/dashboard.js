@@ -573,9 +573,12 @@ function pricingPage() {
     .btn-approve:hover { background: var(--od); transform: translateY(-1px); }
     .btn-approve:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
     .btn-approve.approved { background: var(--s); cursor: default; }
-    .btn-done { background: var(--bg2); color: var(--s); border: 1.5px solid var(--sb); padding: 6px 12px; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600; font-family: inherit; transition: all 0.2s; margin-top: 4px; display: block; width: 100%; }
-    .btn-done:hover { background: var(--sb); color: var(--k); }
-    .btn-done:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
+    .btn-done { position: absolute; top: 4px; right: 4px; background: none; border: none; color: #cc3300; font-size: 16px; font-weight: 700; cursor: pointer; line-height: 1; padding: 2px 6px; border-radius: 3px; opacity: 0.4; transition: opacity 0.15s; }
+    .btn-done:hover { opacity: 1; background: #fff0f0; }
+    .btn-done:disabled { opacity: 0.2; cursor: not-allowed; }
+    .mobile-card { position: relative; }
+    .btn-show-details { background: var(--bg2); color: var(--s); border: 1.5px solid var(--sb); padding: 8px; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: inherit; transition: all 0.2s; display: block; width: 100%; text-align: center; margin-top: 8px; }
+    .btn-show-details:hover { background: var(--sb); color: var(--k); }
     .hours-input { background: var(--w); border: 1.5px solid var(--sb); color: var(--k); padding: 4px 8px; border-radius: 3px; width: 60px; font-size: 14px; font-family: 'DM Mono', monospace; text-align: right; }
     .hours-input:focus { outline: none; border-color: var(--o); }
     .rate-value { font-weight: 700; color: var(--o); font-size: 13px; margin-left: 4px; font-family: 'DM Mono', monospace; }
@@ -730,11 +733,42 @@ function pricingPage() {
 
     function filterTable() { renderTable(getFilteredQuotes()); }
 
+    const loadedAtts = new Set();
+    async function loadAttachments(cardId) {
+      if (loadedAtts.has(cardId)) return;
+      loadedAtts.add(cardId);
+      const containers = document.querySelectorAll('#atts-' + cardId);
+      try {
+        const res = await fetch('/api/cards/' + cardId + '/attachments');
+        const data = await res.json();
+        const atts = (data.attachments || []);
+        let html = '<strong>Attachments:</strong>';
+        if (atts.length === 0) {
+          html += ' <span style="color:var(--mu);font-size:11px;">None</span>';
+        } else {
+          html += '<div class="detail-atts-grid">';
+          for (const a of atts) {
+            if (a.mimeType.startsWith('image/')) {
+              html += '<a href="/api/attachments/' + a.id + '" target="_blank" title="' + a.name + '" class="att-thumb"><img src="/api/attachments/' + a.id + '" alt="' + a.name + '"></a>';
+            } else {
+              const icon = a.mimeType === 'application/pdf' ? 'PDF' : 'FILE';
+              html += '<a href="/api/attachments/' + a.id + '" target="_blank" class="att-file"><span class="att-icon">' + icon + '</span>' + a.name.substring(0, 25) + (a.name.length > 25 ? '...' : '') + '</a>';
+            }
+          }
+          html += '</div>';
+        }
+        containers.forEach(el => el.innerHTML = html);
+      } catch {
+        containers.forEach(el => el.innerHTML = '<strong>Attachments:</strong> <span style="color:var(--mu);font-size:11px;">Failed to load</span>');
+      }
+    }
+
     function toggleDetail(id) {
       const row = document.querySelector('.detail-row[data-id="' + id + '"]');
       if (row) {
         row.classList.toggle('open');
         row.style.display = row.classList.contains('open') ? '' : 'none';
+        if (row.classList.contains('open')) loadAttachments(id);
       }
     }
 
@@ -840,7 +874,7 @@ function pricingPage() {
           '<td class="match">' + d.matchDisplay + '<br>' + d.matchScoreDisplay + '</td>' +
           '<td><input type="number" class="hours-input" id="hours-' + q.id + '" value="' + d.defaultHours + '" min="0" step="0.5" style="width:60px"> <span class="rate-value" id="value-' + q.id + '">&pound;' + d.defaultRate + '</span></td>' +
           '<td></td>' +
-          '<td><button class="btn-approve" data-approve="' + q.id + '">Approve</button><button class="btn-done" data-done="' + q.id + '">Done</button></td>' +
+          '<td style="position:relative;"><button class="btn-approve" data-approve="' + q.id + '">Approve</button><button class="btn-done" data-done="' + q.id + '" title="Done (remove tag)">&times;</button></td>' +
           '</tr>';
         tableHtml += '<tr class="detail-row" data-id="' + q.id + '" style="display:none"><td colspan="13" class="detail-cell">' + detailHtml(q) + '</td></tr>';
       }
@@ -850,6 +884,7 @@ function pricingPage() {
       for (const q of list) {
         const d = cardData(q);
         mobileHtml += '<div class="mobile-card" data-id="' + q.id + '">' +
+          '<button class="btn-done" data-done="' + q.id + '" title="Done (remove tag)">&times;</button>' +
           '<div class="mobile-card-header">' +
             '<div><span class="mobile-card-id"><a href="' + (q.url || '#') + '" target="_blank">' + (q.displayId || '') + '</a></span> ' +
             '<span class="mobile-card-client">' + d.clientDisplay + '</span></div>' +
@@ -873,9 +908,8 @@ function pricingPage() {
             '</div>' +
             '<span class="rate-value" id="m-value-' + q.id + '">&pound;' + d.defaultRate + '</span>' +
             '<button class="btn-approve" data-approve="' + q.id + '">Approve</button>' +
-            '<button class="btn-done" data-done="' + q.id + '">Done</button>' +
           '</div>' +
-          '<span class="mobile-card-expand" data-toggle="' + q.id + '">Show details</span>' +
+          '<button class="btn-show-details" data-toggle="' + q.id + '">Show Details</button>' +
           '<div class="mobile-card-detail" data-detail="' + q.id + '">' + detailHtml(q) + '</div>' +
         '</div>';
       }
@@ -929,7 +963,8 @@ function pricingPage() {
         const mobileDetail = document.querySelector('.mobile-card-detail[data-detail="' + id + '"]');
         if (mobileDetail) {
           mobileDetail.classList.toggle('open');
-          toggleBtn.textContent = mobileDetail.classList.contains('open') ? 'Hide details' : 'Show details';
+          toggleBtn.textContent = mobileDetail.classList.contains('open') ? 'Hide Details' : 'Show Details';
+          if (mobileDetail.classList.contains('open')) loadAttachments(id);
         }
         return;
       }
