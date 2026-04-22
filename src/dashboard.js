@@ -37,19 +37,37 @@ export function createDashboardRouter() {
         archived: false,
       });
 
-      const result = cards
-        .filter(card => {
-          const parsed = parseCardTitle(card.title);
-          return !(parsed.clientCode && EXCLUDED_CLIENT_CODES.has(parsed.clientCode));
-        })
+      const filtered = cards.filter(card => {
+        const parsed = parseCardTitle(card.title);
+        return !(parsed.clientCode && EXCLUDED_CLIENT_CODES.has(parsed.clientCode));
+      });
+
+      // Fetch attachments in parallel batches of 5
+      const attachmentMap = {};
+      for (let i = 0; i < filtered.length; i += 5) {
+        const batch = filtered.slice(i, i + 5);
+        const results = await Promise.all(batch.map(async card => {
+          try {
+            const atts = await api.getCardAttachments(card.id);
+            return { id: card.id, attachments: atts };
+          } catch { return { id: card.id, attachments: [] }; }
+        }));
+        for (const r of results) attachmentMap[r.id] = r.attachments;
+      }
+
+      const result = filtered
         .map(card => {
           const parsed = parseCardTitle(card.title);
           const client = lookupClient(parsed.clientCode);
           const pricing = findSimilarQuotes(card.title, parsed.scope, client?.customerName, 5);
+          const atts = (attachmentMap[card.id] || []).map(a => ({
+            id: a.id, name: a.name, mimeType: a.mimeType || '', size: a.size || 0,
+          }));
           return {
             id: card.id,
             displayId: card.displayId,
             title: card.title,
+            description: card.description || '',
             clientCode: parsed.clientCode,
             zohoCustomerName: client ? client.customerName : null,
             siteName: parsed.siteName,
@@ -72,6 +90,7 @@ export function createDashboardRouter() {
               isClientMatch: sq.isClientMatch,
               date: sq.date,
             })),
+            attachments: atts,
             customFields: card.customFields,
             url: card.url,
             updatedAt: card.updatedAt,
@@ -82,6 +101,23 @@ export function createDashboardRouter() {
       res.json({ success: true, quotes: result });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- API: Proxy Teamhood attachment content (requires API key) ---
+  router.get('/api/attachments/:id', async (req, res) => {
+    try {
+      const attUrl = `${process.env.TEAMHOOD_API_BASE_URL || 'https://api-node.teamhood.com'}/api/v1/attachments/${req.params.id}/content`;
+      const attRes = await fetch(attUrl, {
+        headers: { 'X-ApiKey': process.env.TEAMHOOD_API_KEY },
+      });
+      if (!attRes.ok) return res.status(attRes.status).send('Attachment not found');
+      res.set('Content-Type', attRes.headers.get('content-type') || 'application/octet-stream');
+      res.set('Cache-Control', 'public, max-age=3600');
+      const buffer = Buffer.from(await attRes.arrayBuffer());
+      res.send(buffer);
+    } catch (err) {
+      res.status(500).send('Error fetching attachment');
     }
   });
 
@@ -744,10 +780,31 @@ function pricingPage() {
       }
 
       function detailHtml(q) {
-        let html = '<strong>Custom Fields:</strong> ' + (q.customFields || []).filter(f => f.value).map(f => f.name + ': ' + f.value).join(' | ');
+        let html = '';
+        // Description
+        if (q.description) {
+          html += '<div style="margin-bottom:12px;"><strong>Description:</strong><div style="white-space:pre-wrap;font-size:12px;color:var(--s);margin-top:4px;padding:8px;background:var(--w);border:1px solid var(--sb);border-radius:3px;max-height:200px;overflow-y:auto;">' + q.description + '</div></div>';
+        }
+        // Attachments
+        if (q.attachments && q.attachments.length > 0) {
+          html += '<div style="margin-bottom:12px;"><strong>Attachments:</strong><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">';
+          for (const a of q.attachments) {
+            const isImage = a.mimeType.startsWith('image/');
+            if (isImage) {
+              html += '<a href="/api/attachments/' + a.id + '" target="_blank" title="' + a.name + '"><img src="/api/attachments/' + a.id + '" style="max-width:120px;max-height:90px;border:1px solid var(--sb);border-radius:3px;object-fit:cover;"></a>';
+            } else {
+              const icon = a.mimeType === 'application/pdf' ? 'PDF' : 'FILE';
+              html += '<a href="/api/attachments/' + a.id + '" target="_blank" style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--w);border:1px solid var(--sb);border-radius:3px;font-size:11px;color:var(--s);text-decoration:none;"><span style="font-weight:700;color:var(--o);">' + icon + '</span>' + a.name.substring(0, 30) + (a.name.length > 30 ? '...' : '') + '</a>';
+            }
+          }
+          html += '</div></div>';
+        }
+        // Custom fields
+        html += '<strong>Custom Fields:</strong> ' + (q.customFields || []).filter(f => f.value).map(f => f.name + ': ' + f.value).join(' | ');
         if (q.suggestedRate?.hours) {
           html += '<br><strong>Estimated Hours:</strong> ' + q.suggestedRate.hours + 'hrs @ &pound;85/hr';
         }
+        // Reference quotes
         if (q.similarQuotes && q.similarQuotes.length > 0) {
           html += '<br><br><strong>Reference Quotes:</strong>';
           for (const sq of q.similarQuotes) {
