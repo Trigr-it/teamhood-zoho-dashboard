@@ -315,6 +315,17 @@ function pickSection(options, cardText, refValue) {
 }
 
 /**
+ * Extract a dimension value (Length/Width/Height) from card text.
+ * Returns the value if found, empty string otherwise.
+ */
+function extractDimension(cardText, label) {
+  // Match "Label: value" on its own line
+  const lineMatch = cardText.match(new RegExp(`^${label}[:\\s]+(.+)$`, 'mi'));
+  if (lineMatch && lineMatch[1].trim()) return lineMatch[1].trim();
+  return '';
+}
+
+/**
  * Build SCAFFOLD line item description.
  */
 function buildScaffoldDescription(scope, cardText, refValues) {
@@ -333,6 +344,11 @@ function buildScaffoldDescription(scope, cardText, refValues) {
   // Ensure CAT II is always present
   const ancValue = anc.includes('CAT II Check') ? anc : 'CAT II Check - Included\n' + anc;
 
+  // Dimensions from card text only — never from reference quotes
+  const length = extractDimension(cardText, 'Length');
+  const width = extractDimension(cardText, 'Width');
+  const height = extractDimension(cardText, 'Height');
+
   return `Title: ${title}
 Grid Lines: ${gridLines}
 
@@ -350,9 +366,9 @@ ${cladding}
 Ties:
 ${ties}
 
-Length: ${refValues.length || ''}
-Width: ${refValues.width || ''}
-Height: ${refValues.height || ''}
+Length: ${length}
+Width: ${width}
+Height: ${height}
 
 Ancillaries:
 ${ancValue}`;
@@ -442,6 +458,90 @@ function getLineItemDescription(scope, cardDescription, cardTitle, clientName) {
 /**
  * Approve a Teamhood card → create Zoho draft estimate.
  */
+/**
+ * Create a quick quote (no Teamhood card required).
+ * Currently supports "site-visit" template.
+ */
+export async function createQuickQuote({ template, clientCode, project }) {
+  const client = lookupClient(clientCode);
+  if (!client) {
+    throw new Error(`Client code "${clientCode}" not found in client-identifiers.txt`);
+  }
+
+  const isIreland = IE_CLIENT_CODES.has(clientCode.toUpperCase());
+
+  // Find Zoho customer
+  const contactSearch = await zohoRequest('GET', `/contacts?search_text=${encodeURIComponent(client.customerName)}`);
+  const contacts = contactSearch.contacts || [];
+  if (contacts.length === 0) {
+    throw new Error(`No Zoho contact found for "${client.customerName}". Create the contact in Zoho first.`);
+  }
+  const customerId = contacts[0].contact_id;
+  const customerName = contacts[0].contact_name;
+
+  // Contact persons
+  let contactPersonIds = [];
+  try {
+    const contactDetail = await zohoRequest('GET', `/contacts/${customerId}`);
+    const persons = contactDetail.contact?.contact_persons || [];
+    contactPersonIds = persons.filter(p => p.is_primary_contact).map(p => p.contact_person_id);
+  } catch (err) {
+    console.warn(`[quick-quote] Could not fetch contact persons for ${customerName}:`, err.message);
+  }
+
+  // Find or create project
+  let projectId = null;
+  try {
+    projectId = await findOrCreateProject(customerId, project);
+  } catch (err) {
+    console.warn(`[quick-quote] Project lookup/create failed for "${project}":`, err.message);
+  }
+
+  // Build line items based on template
+  let lineItems;
+  let reference;
+
+  if (template === 'site-visit') {
+    reference = `${project} - Site Visit`;
+    lineItems = [{
+      item_id: SITE_VISIT_ITEM.item_id,
+      name: SITE_VISIT_ITEM.name,
+      description: SITE_VISIT_ITEM.description,
+      rate: SITE_VISIT_ITEM.rate,
+      quantity: SITE_VISIT_ITEM.quantity,
+      tax_id: isIreland ? ZERO_TAX_ID : DEFAULT_TAX_ID,
+    }];
+  } else {
+    throw new Error(`Unknown template: ${template}`);
+  }
+
+  const estimateBody = {
+    customer_id: customerId,
+    contact_persons: contactPersonIds,
+    reference_number: reference,
+    salesperson_id: SALESPERSON.UK,
+    line_items: lineItems,
+  };
+
+  if (projectId) estimateBody.project_id = projectId;
+
+  const result = await zohoRequest('POST', '/estimates', estimateBody);
+
+  if (result.code && result.code !== 0) {
+    throw new Error(`Zoho error: ${result.message || JSON.stringify(result)}`);
+  }
+
+  return {
+    success: true,
+    estimateId: result.estimate?.estimate_id,
+    estimateNumber: result.estimate?.estimate_number,
+    customerName,
+    projectName: project,
+    reference,
+    template,
+  };
+}
+
 export async function approveCard(cardId, { rate, quantity = 1 }) {
   // 1. Fetch card
   const card = await teamhoodApi.getCard(cardId);

@@ -7,7 +7,8 @@ import { zohoRequest } from './zoho/api.js';
 import { parseCardTitle } from './utils/title-parser.js';
 import { lookupClient } from './utils/client-lookup.js';
 import { findSimilarQuotes } from './utils/quote-matcher.js';
-import { approveCard } from './approve.js';
+import { approveCard, createQuickQuote } from './approve.js';
+import { getAllClients } from './utils/client-lookup.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const EXCLUDED_CLIENT_CODES = new Set(['BFT']);
@@ -138,6 +139,54 @@ export function createDashboardRouter() {
     try {
       const result = await api.removeTag(req.params.cardId, 'Price Required');
       res.json({ success: true, displayId: result?.displayId });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- API: List all clients (for quick-quote dropdown) ---
+  router.get('/api/clients', (_req, res) => {
+    try {
+      const clients = getAllClients().filter(c => !EXCLUDED_CLIENT_CODES.has(c.code));
+      res.json({ success: true, clients });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- API: List Zoho projects for a client code ---
+  router.get('/api/clients/:code/projects', async (req, res) => {
+    try {
+      const client = lookupClient(req.params.code);
+      if (!client) return res.status(404).json({ success: false, error: 'Client code not found' });
+
+      // Find Zoho customer
+      const contactSearch = await zohoRequest('GET', `/contacts?search_text=${encodeURIComponent(client.customerName)}`);
+      const contacts = contactSearch.contacts || [];
+      if (contacts.length === 0) return res.json({ success: true, projects: [] });
+
+      const customerId = contacts[0].contact_id;
+      const projectsResult = await zohoRequest('GET', `/projects?customer_id=${customerId}`);
+      const projects = (projectsResult.projects || [])
+        .filter(p => p.status === 'active')
+        .map(p => ({ id: p.project_id, name: p.project_name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+      res.json({ success: true, projects });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- API: Create quick quote (no Teamhood card) ---
+  router.post('/api/quotes/quick', async (req, res) => {
+    try {
+      const { template, clientCode, project } = req.body;
+      if (!template || !clientCode || !project) {
+        return res.status(400).json({ success: false, error: 'template, clientCode, and project are required' });
+      }
+      const result = await createQuickQuote({ template, clientCode, project });
+      res.json(result);
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -629,6 +678,29 @@ function pricingPage() {
     .mobile-card-tags { margin: 6px 0; }
     .mobile-card-assignee { color: var(--s); font-size: 12px; font-weight: 600; }
     .mobile-card-expand { color: var(--o); font-size: 12px; font-weight: 700; cursor: pointer; display: inline-block; margin-top: 6px; }
+    .btn-add-quote { background: var(--w); color: var(--o); border: 1.5px solid var(--o); padding: 10px 20px; border-radius: 3px; cursor: pointer; font-size: 13px; font-weight: 700; font-family: inherit; transition: all 0.2s; margin-right: 8px; }
+    .btn-add-quote:hover { background: var(--o); color: var(--w); transform: translateY(-1px); }
+    .quick-quote-panel { display: none; background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 20px; margin-bottom: 20px; }
+    .quick-quote-panel.open { display: block; }
+    .qq-title { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mu); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 14px; font-weight: 500; }
+    .qq-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+    .qq-field { display: flex; flex-direction: column; gap: 4px; }
+    .qq-field label { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--mu); text-transform: uppercase; letter-spacing: 0.08em; }
+    .qq-field select, .qq-field input { background: var(--w); border: 1.5px solid var(--sb); color: var(--k); padding: 8px 12px; border-radius: 3px; font-size: 13px; font-family: inherit; min-width: 180px; }
+    .qq-field select:focus, .qq-field input:focus { outline: none; border-color: var(--o); }
+    .btn-create-quote { background: var(--o); color: var(--w); border: none; padding: 8px 20px; border-radius: 3px; cursor: pointer; font-size: 13px; font-weight: 700; font-family: inherit; transition: all 0.2s; }
+    .btn-create-quote:hover { background: var(--od); transform: translateY(-1px); }
+    .btn-create-quote:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
+    .qq-project-list { position: absolute; top: 100%; left: 0; right: 0; background: var(--w); border: 1.5px solid var(--sb); border-top: none; border-radius: 0 0 3px 3px; max-height: 200px; overflow-y: auto; z-index: 10; display: none; }
+    .qq-project-list.open { display: block; }
+    .qq-project-item { padding: 8px 12px; font-size: 13px; cursor: pointer; }
+    .qq-project-item:hover, .qq-project-item.active { background: var(--ol); }
+    .qq-project-new { color: var(--o); font-weight: 600; border-top: 1px solid var(--sb); }
+    .qq-hint { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--mu); margin-top: 3px; }
+    .qq-loading { padding: 8px 12px; font-size: 12px; color: var(--mu); }
+    .qq-msg { font-size: 12px; margin-top: 10px; font-weight: 600; }
+    .qq-msg.success { color: #2d8a3e; }
+    .qq-msg.error { color: #cc3300; }
     @media (max-width: 900px) {
       .page { padding: 12px; }
       h1 { font-size: 16px; }
@@ -640,6 +712,8 @@ function pricingPage() {
       .filters select { width: 100%; }
       .desktop-table { display: none; }
       .mobile-cards { display: block; }
+      .qq-row { flex-direction: column; }
+      .qq-field select, .qq-field input { width: 100%; min-width: unset; }
     }
   </style>
 
@@ -647,8 +721,33 @@ function pricingPage() {
     <h1>Pricing</h1>
     <div>
       <span class="load-time" id="loadTime"></span>
+      <button class="btn-add-quote" id="addQuoteBtn" onclick="toggleQuickQuote()">+ Add Quote</button>
       <button class="btn-refresh" id="refreshBtn" onclick="loadQuotes()">Refresh</button>
     </div>
+  </div>
+
+  <div class="quick-quote-panel" id="qqPanel">
+    <div class="qq-title">Quick Quote</div>
+    <div class="qq-row">
+      <div class="qq-field">
+        <label>Template</label>
+        <select id="qqTemplate">
+          <option value="site-visit">Site Visit</option>
+        </select>
+      </div>
+      <div class="qq-field">
+        <label>Client</label>
+        <select id="qqClient" onchange="onClientChange()"><option value="">Select client...</option></select>
+      </div>
+      <div class="qq-field" style="position:relative;">
+        <label>Project / Site Name</label>
+        <input type="text" id="qqProject" placeholder="Select client first..." disabled autocomplete="off" oninput="filterProjectList()" onfocus="showProjectList()">
+        <div id="qqProjectList" class="qq-project-list"></div>
+        <div id="qqProjectHint" class="qq-hint"></div>
+      </div>
+      <button class="btn-create-quote" id="qqCreateBtn" onclick="submitQuickQuote()">Create Draft</button>
+    </div>
+    <div class="qq-msg" id="qqMsg"></div>
   </div>
 
   <div class="stats" id="stats"></div>
@@ -662,6 +761,149 @@ function pricingPage() {
 
   <script>
     let allQuotes = [];
+    let qqClientsLoaded = false;
+    let qqProjects = [];
+
+    function toggleQuickQuote() {
+      const panel = document.getElementById('qqPanel');
+      panel.classList.toggle('open');
+      if (panel.classList.contains('open') && !qqClientsLoaded) {
+        loadQqClients();
+      }
+    }
+
+    async function loadQqClients() {
+      try {
+        const res = await fetch('/api/clients');
+        const data = await res.json();
+        if (!data.success) return;
+        const sel = document.getElementById('qqClient');
+        for (const c of data.clients) {
+          const opt = document.createElement('option');
+          opt.value = c.code;
+          opt.textContent = c.code + ' — ' + c.customerName;
+          sel.appendChild(opt);
+        }
+        qqClientsLoaded = true;
+      } catch (err) {
+        console.error('Failed to load clients:', err);
+      }
+    }
+
+    async function onClientChange() {
+      const code = document.getElementById('qqClient').value;
+      const input = document.getElementById('qqProject');
+      const list = document.getElementById('qqProjectList');
+      const hint = document.getElementById('qqProjectHint');
+      input.value = '';
+      hint.textContent = '';
+      list.classList.remove('open');
+      qqProjects = [];
+
+      if (!code) {
+        input.disabled = true;
+        input.placeholder = 'Select client first...';
+        return;
+      }
+
+      input.disabled = false;
+      input.placeholder = 'Loading projects...';
+      try {
+        const res = await fetch('/api/clients/' + code + '/projects');
+        const data = await res.json();
+        qqProjects = data.success ? data.projects : [];
+        input.placeholder = qqProjects.length
+          ? 'Type to search ' + qqProjects.length + ' projects or enter new...'
+          : 'Enter new project name...';
+        if (qqProjects.length === 0) {
+          hint.textContent = 'No active projects — type a name to create one';
+        }
+      } catch (err) {
+        input.placeholder = 'Enter project name...';
+        console.error('Failed to load projects:', err);
+      }
+      input.focus();
+    }
+
+    function escAttr(s) { return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;'); }
+    function escHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    function filterProjectList() {
+      var input = document.getElementById('qqProject');
+      var list = document.getElementById('qqProjectList');
+      var hint = document.getElementById('qqProjectHint');
+      var val = input.value.trim().toLowerCase();
+
+      if (!val) { list.classList.remove('open'); hint.textContent = ''; return; }
+
+      var matches = qqProjects.filter(function(p) { return p.name.toLowerCase().includes(val); });
+      var exactMatch = qqProjects.some(function(p) { return p.name.toLowerCase() === val; });
+      var html = '';
+
+      for (var i = 0; i < matches.length && i < 10; i++) {
+        html += '<div class="qq-project-item" data-project="' + escAttr(matches[i].name) + '">' + escHtml(matches[i].name) + '</div>';
+      }
+      if (!exactMatch && val.length > 0) {
+        html += '<div class="qq-project-item qq-project-new" data-project="' + escAttr(input.value.trim()) + '">+ Create new: ' + escHtml(input.value.trim()) + '</div>';
+      }
+
+      list.innerHTML = html;
+      list.classList.toggle('open', html.length > 0);
+      hint.textContent = exactMatch ? 'Existing project' : matches.length ? '' : 'New project will be created';
+    }
+
+    function showProjectList() {
+      if (document.getElementById('qqProject').value.trim()) filterProjectList();
+    }
+
+    document.addEventListener('click', function(e) {
+      var item = e.target.closest('.qq-project-item');
+      if (item && item.dataset.project) {
+        var name = item.dataset.project;
+        document.getElementById('qqProject').value = name;
+        document.getElementById('qqProjectList').classList.remove('open');
+        var isExisting = qqProjects.some(function(p) { return p.name === name; });
+        document.getElementById('qqProjectHint').textContent = isExisting ? 'Existing project' : 'New project will be created';
+        return;
+      }
+      var list = document.getElementById('qqProjectList');
+      if (list && !e.target.closest('.qq-field')) list.classList.remove('open');
+    });
+
+    async function submitQuickQuote() {
+      const template = document.getElementById('qqTemplate').value;
+      const clientCode = document.getElementById('qqClient').value;
+      const project = document.getElementById('qqProject').value.trim();
+      const msg = document.getElementById('qqMsg');
+      const btn = document.getElementById('qqCreateBtn');
+
+      if (!clientCode) { msg.className = 'qq-msg error'; msg.textContent = 'Please select a client'; return; }
+      if (!project) { msg.className = 'qq-msg error'; msg.textContent = 'Please enter a project name'; return; }
+
+      btn.disabled = true;
+      btn.textContent = 'Creating...';
+      msg.textContent = '';
+
+      try {
+        const res = await fetch('/api/quotes/quick', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ template, clientCode, project }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        msg.className = 'qq-msg success';
+        msg.textContent = 'Draft estimate ' + data.estimateNumber + ' created for ' + data.customerName + ' — ' + data.projectName;
+        document.getElementById('qqProject').value = '';
+        document.getElementById('qqProjectHint').textContent = '';
+      } catch (err) {
+        msg.className = 'qq-msg error';
+        msg.textContent = err.message;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Create Draft';
+      }
+    }
 
     async function loadQuotes() {
       const btn = document.getElementById('refreshBtn');
@@ -1602,11 +1844,11 @@ function dashboardPage() {
         }
       });
 
-      // Monthly Revenue - line with area fill + invoice count overlay
+      // Monthly Revenue - bar chart with invoice count overlay
       destroyChart('monthly');
       const monthData = dashData.monthlySales;
       charts.monthly = new Chart(document.getElementById('chartMonthly'), {
-        type: 'line',
+        type: 'bar',
         data: {
           labels: monthData.map(m => {
             const parts = m.month.split('-');
@@ -1615,20 +1857,16 @@ function dashboardPage() {
           datasets: [{
             label: 'Revenue',
             data: monthData.map(m => m.total),
-            borderColor: '#FF6700',
-            backgroundColor: 'rgba(255,103,0,0.08)',
-            fill: true,
-            tension: 0.3,
-            pointBackgroundColor: '#FF6700',
+            backgroundColor: '#FF6700',
+            borderRadius: 3,
+            order: 2,
           }, {
             label: 'Invoices',
             data: monthData.map(m => m.count),
-            borderColor: '#2d8a3e',
-            backgroundColor: 'transparent',
-            borderDash: [4, 4],
-            tension: 0.3,
-            pointBackgroundColor: '#2d8a3e',
+            backgroundColor: '#2d8a3e',
+            borderRadius: 3,
             yAxisID: 'y1',
+            order: 1,
           }]
         },
         options: {
@@ -1644,8 +1882,8 @@ function dashboardPage() {
             }
           },
           scales: {
-            y: { ticks: { callback: v => '\\u00a3' + v.toLocaleString() }, grid: { color: '#E8E4DA' } },
-            y1: { position: 'right', grid: { display: false }, ticks: { color: '#2d8a3e' } },
+            y: { beginAtZero: true, ticks: { callback: v => '\\u00a3' + v.toLocaleString() }, grid: { color: '#E8E4DA' } },
+            y1: { beginAtZero: true, position: 'right', grid: { display: false }, ticks: { color: '#2d8a3e' } },
             x: { grid: { color: '#E8E4DA' } }
           }
         }
