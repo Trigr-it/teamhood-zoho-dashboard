@@ -456,6 +456,27 @@ function getLineItemDescription(scope, cardDescription, cardTitle, clientName) {
 }
 
 /**
+ * Build the line item (name + description) for a single card.
+ * Returns { lineItemName, lineItemDescription, siteVisit }.
+ */
+function buildCardLineItem(card, parsed, isIreland, customerName) {
+  const catIII = isCatIIICard(card.title, parsed.scope);
+  const hoist = !catIII && isHoistCard(card.title, parsed.scope, card.description);
+  let lineItemName;
+  if (catIII) {
+    lineItemName = '- CAT III Design Check';
+  } else if (hoist) {
+    lineItemName = '- Design & Analysis (Hoist)';
+  } else {
+    lineItemName = isIreland ? '- Design & Analysis (IE)' : '- Design & Analysis (UK)';
+  }
+  const lineItemDescription = getLineItemDescription(parsed.scope, card.description, card.title, customerName);
+  const siteVisit = (card.customFields || []).find(f => f.name === 'Site Visit')?.value === 'true';
+  const clientContact = (card.customFields || []).find(f => f.name === 'Client Contact')?.value || '';
+  return { lineItemName, lineItemDescription, siteVisit, clientContact };
+}
+
+/**
  * Approve a Teamhood card → create Zoho draft estimate.
  */
 /**
@@ -582,22 +603,9 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
     console.warn(`[approve] Project lookup/create failed for "${parsed.siteName}":`, err.message);
   }
 
-  // 4. Extract custom fields from Teamhood
-  const clientContact = (card.customFields || []).find(f => f.name === 'Client Contact')?.value || '';
-  const siteVisit = (card.customFields || []).find(f => f.name === 'Site Visit')?.value === 'true';
-
-  // 5. Build line item — detect CAT III first, then hoist, then scaffold
-  const catIII = isCatIIICard(card.title, parsed.scope);
-  const hoist = !catIII && isHoistCard(card.title, parsed.scope, card.description);
-  let lineItemName;
-  if (catIII) {
-    lineItemName = '- CAT III Design Check';
-  } else if (hoist) {
-    lineItemName = '- Design & Analysis (Hoist)';
-  } else {
-    lineItemName = isIreland ? '- Design & Analysis (IE)' : '- Design & Analysis (UK)';
-  }
-  const lineItemDescription = getLineItemDescription(parsed.scope, card.description, card.title, client.customerName);
+  // 4. Build line item (name, description) + extract custom fields
+  const { lineItemName, lineItemDescription, siteVisit, clientContact } =
+    buildCardLineItem(card, parsed, isIreland, client.customerName);
 
   // 5. Build reference: "Site Name - Short Scope"
   const reference = buildReference(parsed.siteName, parsed.scope);
@@ -663,5 +671,152 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
     rate,
     isIreland,
     tagRemoved,
+  };
+}
+
+/**
+ * Approve multiple Teamhood cards as a SINGLE combined Zoho draft estimate.
+ *
+ * @param {string} primaryCardId - The card whose Approve button was clicked.
+ *                                 Used for site/project routing, reference, and PO number fallback order.
+ * @param {Array<{cardId: string, rate: number, quantity?: number}>} cards
+ * @returns Combined result with per-card tag-removal status.
+ */
+export async function approveCombined(primaryCardId, cards) {
+  if (!Array.isArray(cards) || cards.length === 0) {
+    throw new Error('No cards provided for combined approval.');
+  }
+
+  // 1. Fetch all cards in parallel
+  const fetched = await Promise.all(cards.map(c => teamhoodApi.getCard(c.cardId)));
+  const missing = fetched.findIndex(c => !c);
+  if (missing >= 0) throw new Error(`Card not found: ${cards[missing].cardId}`);
+
+  // Pair each fetched card with its rate/quantity, parsed title, etc.
+  const items = fetched.map((card, i) => ({
+    card,
+    rate: cards[i].rate || 0,
+    quantity: cards[i].quantity || 1,
+    parsed: parseCardTitle(card.title),
+  }));
+
+  // 2. Validate same client code across all cards
+  const clientCodes = [...new Set(items.map(it => it.parsed.clientCode))];
+  if (clientCodes.length > 1) {
+    throw new Error(
+      `Cannot combine cards from different clients: ${clientCodes.join(', ')}. ` +
+      `Please tick only cards that share the same client code.`
+    );
+  }
+  const clientCode = clientCodes[0];
+  const client = lookupClient(clientCode);
+  if (!client) {
+    throw new Error(`Client code "${clientCode}" not found in client-identifiers.txt`);
+  }
+  const isIreland = IE_CLIENT_CODES.has(clientCode);
+
+  // 3. Identify the primary card (drives project routing + reference + PO fallback order)
+  const primary = items.find(it => it.card.id === primaryCardId) || items[0];
+
+  // 4. Find Zoho customer
+  const contactSearch = await zohoRequest('GET', `/contacts?search_text=${encodeURIComponent(client.customerName)}`);
+  const contacts = contactSearch.contacts || [];
+  if (contacts.length === 0) {
+    throw new Error(`No Zoho contact found for "${client.customerName}". Create the contact in Zoho first.`);
+  }
+  const customerId = contacts[0].contact_id;
+  const customerName = contacts[0].contact_name;
+
+  // 5. Contact persons
+  let contactPersonIds = [];
+  try {
+    const contactDetail = await zohoRequest('GET', `/contacts/${customerId}`);
+    const persons = contactDetail.contact?.contact_persons || [];
+    contactPersonIds = persons.filter(p => p.is_primary_contact).map(p => p.contact_person_id);
+  } catch (err) {
+    console.warn(`[approve-combined] Could not fetch contact persons for ${customerName}:`, err.message);
+  }
+
+  // 6. Find or create project — uses primary card's site name
+  let projectId = null;
+  try {
+    projectId = await findOrCreateProject(customerId, primary.parsed.siteName);
+  } catch (err) {
+    console.warn(`[approve-combined] Project lookup/create failed for "${primary.parsed.siteName}":`, err.message);
+  }
+
+  // 7. Build line items — one per card, in primary-first order
+  const orderedItems = [primary, ...items.filter(it => it !== primary)];
+  const taxId = isIreland ? ZERO_TAX_ID : DEFAULT_TAX_ID;
+  const lineItems = [];
+  let anySiteVisit = false;
+  let poNumber = '';
+
+  for (const it of orderedItems) {
+    const built = buildCardLineItem(it.card, it.parsed, isIreland, client.customerName);
+    if (built.siteVisit) anySiteVisit = true;
+    if (!poNumber && built.clientContact) poNumber = built.clientContact;
+    lineItems.push({
+      name: built.lineItemName,
+      description: built.lineItemDescription,
+      quantity: it.quantity,
+      rate: it.rate,
+      tax_id: taxId,
+    });
+  }
+
+  // 8. Single Site Visit line if any card had it ticked
+  if (anySiteVisit) {
+    lineItems.push({
+      item_id: SITE_VISIT_ITEM.item_id,
+      name: SITE_VISIT_ITEM.name,
+      description: SITE_VISIT_ITEM.description,
+      rate: SITE_VISIT_ITEM.rate,
+      quantity: SITE_VISIT_ITEM.quantity,
+      tax_id: taxId,
+    });
+  }
+
+  // 9. Reference + salesperson — based on primary card
+  const reference = buildReference(primary.parsed.siteName, primary.parsed.scope);
+  const salespersonId = isIreland ? SALESPERSON.IE : SALESPERSON.UK;
+
+  // 10. Create draft estimate
+  const estimateBody = {
+    customer_id: customerId,
+    contact_persons: contactPersonIds,
+    reference_number: reference,
+    salesperson_id: salespersonId,
+    custom_fields: poNumber ? [{ api_name: 'cf_po_number', value: poNumber }] : [],
+    line_items: lineItems,
+  };
+  if (projectId) estimateBody.project_id = projectId;
+
+  const result = await zohoRequest('POST', '/estimates', estimateBody);
+  if (result.code && result.code !== 0) {
+    throw new Error(`Zoho error: ${result.message || JSON.stringify(result)}`);
+  }
+
+  // 11. Remove "Price Required" tag from each card in parallel
+  const tagResults = await Promise.all(items.map(async (it) => {
+    try {
+      await teamhoodApi.removeTag(it.card.id, 'Price Required');
+      return { cardId: it.card.id, displayId: it.card.displayId, tagRemoved: true };
+    } catch (err) {
+      console.warn(`[approve-combined] Could not remove "Price Required" tag from ${it.card.displayId}:`, err.message);
+      return { cardId: it.card.id, displayId: it.card.displayId, tagRemoved: false, error: err.message };
+    }
+  }));
+
+  return {
+    success: true,
+    estimateId: result.estimate?.estimate_id,
+    estimateNumber: result.estimate?.estimate_number,
+    customerName,
+    projectName: primary.parsed.siteName,
+    reference,
+    isIreland,
+    cards: tagResults,
+    lineItemCount: lineItems.length,
   };
 }

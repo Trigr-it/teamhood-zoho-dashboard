@@ -7,7 +7,7 @@ import { zohoRequest } from './zoho/api.js';
 import { parseCardTitle } from './utils/title-parser.js';
 import { lookupClient } from './utils/client-lookup.js';
 import { findSimilarQuotes } from './utils/quote-matcher.js';
-import { approveCard, createQuickQuote } from './approve.js';
+import { approveCard, approveCombined, createQuickQuote } from './approve.js';
 import { getAllClients } from './utils/client-lookup.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -128,6 +128,25 @@ export function createDashboardRouter() {
         lineItemName,
         lineItemDescription,
       });
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- API: Approve multiple cards as a single combined Zoho estimate ---
+  router.post('/api/cards/approve-combined', async (req, res) => {
+    try {
+      const { primaryCardId, cards } = req.body || {};
+      if (!primaryCardId || !Array.isArray(cards) || cards.length === 0) {
+        return res.status(400).json({ success: false, error: 'primaryCardId and non-empty cards array required' });
+      }
+      const normalized = cards.map(c => ({
+        cardId: c.cardId,
+        rate: parseFloat(c.rate) || 0,
+        quantity: parseInt(c.quantity) || 1,
+      }));
+      const result = await approveCombined(primaryCardId, normalized);
       res.json(result);
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -622,6 +641,14 @@ function pricingPage() {
     .btn-approve:hover { background: var(--od); transform: translateY(-1px); }
     .btn-approve:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
     .btn-approve.approved { background: var(--s); cursor: default; }
+    .combine-cell { width: 28px; text-align: center; }
+    .combine-tick { width: 16px; height: 16px; cursor: pointer; accent-color: var(--o); }
+    .quote-row.combine-on > td:first-child { border-left: 3px solid var(--o); }
+    .quote-row.combine-on { background: var(--ol); }
+    .mobile-card.combine-on { border-left: 3px solid var(--o); }
+    .mobile-card-combine { display: flex; align-items: center; gap: 4px; font-family: 'DM Mono', monospace; font-size: 9px; color: var(--mu); text-transform: uppercase; letter-spacing: 0.06em; cursor: pointer; user-select: none; padding: 4px 6px; border: 1.5px solid var(--sb); border-radius: 3px; }
+    .mobile-card.combine-on .mobile-card-combine { border-color: var(--o); color: var(--o); }
+    .mobile-card-combine input { width: 14px; height: 14px; cursor: pointer; accent-color: var(--o); margin: 0; }
     .btn-done { background: var(--bg2); color: var(--s); border: 1.5px solid var(--sb); padding: 6px 12px; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: 600; font-family: inherit; transition: all 0.2s; margin-top: 4px; display: block; width: 100%; }
     .btn-done:hover { background: var(--sb); color: var(--k); }
     .btn-done:disabled { background: var(--sb); color: var(--mu); cursor: not-allowed; }
@@ -763,6 +790,29 @@ function pricingPage() {
     let allQuotes = [];
     let qqClientsLoaded = false;
     let qqProjects = [];
+    const combineSet = new Set();
+
+    function updateApproveButtonLabels() {
+      const count = combineSet.size;
+      document.querySelectorAll('[data-approve]').forEach(function(btn) {
+        const id = btn.dataset.approve;
+        if (count >= 2 && combineSet.has(id) && !btn.classList.contains('approved')) {
+          btn.textContent = 'Approve (' + count + ' combined)';
+        } else if (!btn.classList.contains('approved')) {
+          btn.textContent = 'Approve';
+        }
+      });
+    }
+
+    function setCombine(id, on) {
+      if (on) combineSet.add(id); else combineSet.delete(id);
+      const row = document.querySelector('.quote-row[data-id="' + id + '"]');
+      if (row) row.classList.toggle('combine-on', on);
+      const mcard = document.querySelector('.mobile-card[data-id="' + id + '"]');
+      if (mcard) mcard.classList.toggle('combine-on', on);
+      document.querySelectorAll('[data-combine="' + id + '"]').forEach(function(cb) { cb.checked = on; });
+      updateApproveButtonLabels();
+    }
 
     function toggleQuickQuote() {
       const panel = document.getElementById('qqPanel');
@@ -1016,11 +1066,19 @@ function pricingPage() {
       }
     }
 
+    function readHours(id) {
+      const input = document.getElementById('hours-' + id) || document.getElementById('m-hours-' + id);
+      return parseFloat(input?.value) || 0;
+    }
+
     async function approveQuote(id, btn) {
+      if (combineSet.size >= 2 && combineSet.has(id)) {
+        return approveCombined(id, btn);
+      }
+
       const q = allQuotes.find(q => q.id === id);
       if (!q) return;
-      const hoursInput = document.getElementById('hours-' + id) || document.getElementById('m-hours-' + id);
-      const hours = parseFloat(hoursInput?.value) || 0;
+      const hours = readHours(id);
       if (hours <= 0) { alert('Please enter hours before approving.'); return; }
       const rate = hours * 85;
       if (!q.zohoCustomerName) { alert('Cannot approve: client code "' + q.clientCode + '" is not mapped in client-identifiers.txt'); return; }
@@ -1046,6 +1104,77 @@ function pricingPage() {
       } catch (err) {
         btn.disabled = false;
         btn.textContent = 'Approve';
+        msgEl.className = 'error-msg';
+        msgEl.textContent = err.message;
+      }
+    }
+
+    async function approveCombined(primaryId, btn) {
+      const ids = [...combineSet];
+      const items = ids.map(id => {
+        const q = allQuotes.find(qq => qq.id === id);
+        const hours = readHours(id);
+        return { id, q, hours, rate: hours * 85 };
+      });
+
+      const missing = items.find(it => !it.q);
+      if (missing) { alert('One of the selected cards is no longer in the list. Untick and retry.'); return; }
+      const noHours = items.find(it => it.hours <= 0);
+      if (noHours) { alert('Card ' + noHours.q.displayId + ' has no hours entered.'); return; }
+      const unmapped = items.find(it => !it.q.zohoCustomerName);
+      if (unmapped) { alert('Cannot approve: client code "' + unmapped.q.clientCode + '" is not mapped in client-identifiers.txt'); return; }
+      const codes = [...new Set(items.map(it => it.q.clientCode))];
+      if (codes.length > 1) {
+        alert('Selected cards span different clients (' + codes.join(', ') + '). Untick mismatches and retry.');
+        return;
+      }
+
+      const customerName = items[0].q.zohoCustomerName;
+      const totalHours = items.reduce((s, it) => s + it.hours, 0);
+      const totalValue = totalHours * 85;
+      const summary = items.map(it => '  ' + it.q.displayId + ' — ' + it.hours + 'hrs').join('\\n');
+      if (!confirm(
+        'Combine ' + items.length + ' cards into ONE Zoho draft estimate for ' + customerName + '?\\n\\n' +
+        summary + '\\n\\nTotal: ' + totalHours + 'hrs = ' + String.fromCharCode(163) + totalValue
+      )) return;
+
+      btn.disabled = true;
+      btn.textContent = 'Creating...';
+      const msgEl = document.createElement('div');
+      btn.parentElement.appendChild(msgEl);
+
+      try {
+        const res = await fetch('/api/cards/approve-combined', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            primaryCardId: primaryId,
+            cards: items.map(it => ({ cardId: it.id, rate: it.rate, quantity: 1 })),
+          }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+
+        for (const c of data.cards) {
+          document.querySelectorAll('[data-approve="' + c.cardId + '"]').forEach(function(b) {
+            b.textContent = 'Approved';
+            b.classList.add('approved');
+            b.disabled = true;
+          });
+          combineSet.delete(c.cardId);
+          const row = document.querySelector('.quote-row[data-id="' + c.cardId + '"]');
+          if (row) row.classList.remove('combine-on');
+          const mcard = document.querySelector('.mobile-card[data-id="' + c.cardId + '"]');
+          if (mcard) mcard.classList.remove('combine-on');
+        }
+        updateApproveButtonLabels();
+
+        const tagSummary = data.cards.map(c => c.tagRemoved ? c.displayId + ' tag removed' : c.displayId + ' tag FAILED').join(', ');
+        msgEl.className = 'success-msg';
+        msgEl.textContent = data.estimateNumber + ' created with ' + data.lineItemCount + ' line items (' + tagSummary + ')';
+      } catch (err) {
+        btn.disabled = false;
+        updateApproveButtonLabels();
         msgEl.className = 'error-msg';
         msgEl.textContent = err.message;
       }
@@ -1100,14 +1229,18 @@ function pricingPage() {
       }
 
       let tableHtml = '<div class="desktop-table"><table><thead><tr>' +
-        '<th></th><th>Card</th><th>Client</th><th>Site</th><th>Scope</th><th>Assignee</th>' +
+        '<th></th><th class="combine-cell" title="Tick to combine into one quote">+</th>' +
+        '<th>Card</th><th>Client</th><th>Site</th><th>Scope</th><th>Assignee</th>' +
         '<th>Keywords</th><th>Suggested</th><th>Top Match</th><th>Hours</th><th>Value</th><th></th>' +
         '</tr></thead><tbody>';
 
       for (const q of list) {
         const d = cardData(q);
-        tableHtml += '<tr class="quote-row" data-id="' + q.id + '">' +
+        const checked = combineSet.has(q.id) ? ' checked' : '';
+        const rowCombine = combineSet.has(q.id) ? ' combine-on' : '';
+        tableHtml += '<tr class="quote-row' + rowCombine + '" data-id="' + q.id + '">' +
           '<td><span class="expand-btn" data-toggle="' + q.id + '">+</span></td>' +
+          '<td class="combine-cell"><input type="checkbox" class="combine-tick" data-combine="' + q.id + '"' + checked + '></td>' +
           '<td><a href="' + (q.url || '#') + '" target="_blank">' + (q.displayId || '') + '</a></td>' +
           '<td>' + d.clientDisplay + '</td>' +
           '<td>' + (q.siteName || '-') + '</td>' +
@@ -1127,7 +1260,9 @@ function pricingPage() {
       let mobileHtml = '<div class="mobile-cards">';
       for (const q of list) {
         const d = cardData(q);
-        mobileHtml += '<div class="mobile-card" data-id="' + q.id + '">' +
+        const checked = combineSet.has(q.id) ? ' checked' : '';
+        const mobileCombine = combineSet.has(q.id) ? ' combine-on' : '';
+        mobileHtml += '<div class="mobile-card' + mobileCombine + '" data-id="' + q.id + '">' +
           '<button class="btn-done-x" data-done="' + q.id + '" title="Done (remove tag)">&times;</button>' +
           '<div class="mobile-card-header">' +
             '<div><span class="mobile-card-id"><a href="' + (q.url || '#') + '" target="_blank">' + (q.displayId || '') + '</a></span> ' +
@@ -1151,6 +1286,7 @@ function pricingPage() {
               '<button class="btn-step" data-step="0.5" data-for="m-hours-' + q.id + '">+</button>' +
             '</div>' +
             '<span class="rate-value" id="m-value-' + q.id + '">&pound;' + d.defaultRate + '</span>' +
+            '<label class="mobile-card-combine" title="Tick to combine into one quote"><input type="checkbox" class="combine-tick" data-combine="' + q.id + '"' + checked + '>combine</label>' +
             '<button class="btn-approve" data-approve="' + q.id + '">Approve</button>' +
           '</div>' +
           '<button class="btn-show-details" data-toggle="' + q.id + '">Show Details</button>' +
@@ -1160,6 +1296,7 @@ function pricingPage() {
       mobileHtml += '</div>';
 
       document.getElementById('content').innerHTML = tableHtml + mobileHtml;
+      updateApproveButtonLabels();
     }
 
     async function markDone(id, btn) {
@@ -1183,7 +1320,15 @@ function pricingPage() {
       }
     }
 
+    document.getElementById('content').addEventListener('change', function(e) {
+      const cb = e.target.closest('[data-combine]');
+      if (cb) {
+        setCombine(cb.dataset.combine, cb.checked);
+      }
+    });
+
     document.getElementById('content').addEventListener('click', function(e) {
+      if (e.target.closest('[data-combine]')) return;
       const stepBtn = e.target.closest('[data-step]');
       if (stepBtn) {
         const input = document.getElementById(stepBtn.dataset.for);
