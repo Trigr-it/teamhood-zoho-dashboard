@@ -1,0 +1,10 @@
+{
+  "staff": [
+    { "id": "noam", "name": "Noam", "startDate": null, "salaryHistory": [] },
+    { "id": "derek", "name": "Derek", "startDate": null, "salaryHistory": [] },
+    { "id": "lorcan", "name": "Lorcan", "startDate": null, "salaryHistory": [] },
+    { "id": "fereshteh", "name": "Fereshteh", "startDate": null, "salaryHistory": [] },
+    { "id": "mariana", "name": "Mariana", "startDate": null, "salaryHistory": [] },
+    { "id": "klea", "name": "Klea", "startDate": null, "salaryHistory": [] }
+  ]
+}

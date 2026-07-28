@@ -9,6 +9,15 @@ import { lookupClient } from './utils/client-lookup.js';
 import { findSimilarQuotes } from './utils/quote-matcher.js';
 import { approveCard, approveCombined, createQuickQuote } from './approve.js';
 import { getAllClients } from './utils/client-lookup.js';
+import {
+  listStaff,
+  updateStartDate,
+  addSalaryEntry,
+  deleteSalaryEntry,
+  overheadsPassword,
+  isAuthorized as isOverheadsAuthorized,
+  authCookieValue as overheadsAuthCookie,
+} from './overheads.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const EXCLUDED_CLIENT_CODES = new Set(['BFT']);
@@ -472,12 +481,71 @@ export function createDashboardRouter() {
     }
   });
 
+  // --- API: Overheads (staff + salary) ---
+  function requireOverheadsAuth(req, res, next) {
+    if (isOverheadsAuthorized(req)) return next();
+    res.status(401).json({ success: false, error: 'Overheads authentication required' });
+  }
+
+  router.post('/api/overheads/auth', (req, res) => {
+    const { password } = req.body || {};
+    if (password !== overheadsPassword()) {
+      return res.status(401).json({ success: false, error: 'Incorrect password' });
+    }
+    const cookie = `overheads_auth=${overheadsAuthCookie()}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200`;
+    res.setHeader('Set-Cookie', cookie);
+    res.json({ success: true });
+  });
+
+  router.post('/api/overheads/logout', (_req, res) => {
+    res.setHeader('Set-Cookie', 'overheads_auth=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+    res.json({ success: true });
+  });
+
+  router.get('/api/overheads/staff', requireOverheadsAuth, (_req, res) => {
+    try {
+      res.json({ success: true, staff: listStaff() });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  router.put('/api/overheads/staff/:id/start-date', requireOverheadsAuth, (req, res) => {
+    try {
+      const view = updateStartDate(req.params.id, req.body?.startDate || null);
+      res.json({ success: true, staff: view });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  router.post('/api/overheads/staff/:id/salary', requireOverheadsAuth, (req, res) => {
+    try {
+      const view = addSalaryEntry(req.params.id, req.body || {});
+      res.json({ success: true, staff: view });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  router.delete('/api/overheads/staff/:id/salary/:index', requireOverheadsAuth, (req, res) => {
+    try {
+      const { view } = deleteSalaryEntry(req.params.id, parseInt(req.params.index, 10));
+      res.json({ success: true, staff: view });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
   // --- UI Routes ---
   router.get('/', (_req, res) => res.send(pageShell('Home', 'home', '', landingPage())));
   router.get('/pricing', (_req, res) => res.send(pageShell('Pricing', 'pricing', '', pricingPage())));
   router.get('/live-quotes', (_req, res) => res.send(pageShell('Live Quotes', 'live-quotes', '', liveQuotesPage())));
   router.get('/dashboard', (_req, res) => res.send(pageShell('Dashboard', 'dashboard',
     '<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>', dashboardPage())));
+  router.get('/overheads', (req, res) => res.send(pageShell('Overheads', 'overheads',
+    '<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>',
+    overheadsPage({ authed: isOverheadsAuthorized(req) }))));
 
   return router;
 }
@@ -492,6 +560,7 @@ function pageShell(title, activeNav, headExtra, bodyContent) {
     { key: 'pricing', label: 'Pricing', href: '/pricing' },
     { key: 'live-quotes', label: 'Live Quotes', href: '/live-quotes' },
     { key: 'dashboard', label: 'Dashboard', href: '/dashboard' },
+    { key: 'overheads', label: 'Overheads', href: '/overheads' },
   ];
   const navHtml = navItems.map(n =>
     `<a href="${n.href}" class="nav-link${n.key === activeNav ? ' nav-active' : ''}">${n.label}</a>`
@@ -590,6 +659,17 @@ function landingPage() {
             </div>
             <div class="tile-title">Dashboard</div>
             <div class="tile-desc">Financial overview with sales charts, KPIs, and pipeline tracking</div>
+          </div>
+        </a>
+        <a href="/overheads" style="text-decoration:none;">
+          <div class="tile-card">
+            <div class="tile-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--o)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+            </div>
+            <div class="tile-title">Overheads</div>
+            <div class="tile-desc">Staff tenure, milestones, and salary growth (password protected)</div>
           </div>
         </a>
       </div>
@@ -2083,5 +2163,513 @@ function dashboardPage() {
     document.getElementById('dashTo').value = initDates.to;
 
     loadDashboard();
+  </script>`;
+}
+
+// ---------------------------------------------------------------------------
+// Overheads page (staff + salary history, password-gated)
+// ---------------------------------------------------------------------------
+
+function overheadsPage({ authed }) {
+  if (!authed) return overheadsLoginPage();
+
+  return `
+  <style>
+    .oh-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1.5px solid var(--sb); }
+    .oh-header-actions { display: flex; gap: 8px; align-items: center; }
+    .btn-lock { background: var(--bg2); color: var(--s); border: 1.5px solid var(--sb); padding: 8px 14px; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: inherit; }
+    .btn-lock:hover { background: var(--sb); color: var(--k); }
+    .oh-stats { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+    .oh-stat { background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 14px 18px; min-width: 140px; }
+    .oh-stat-value { font-size: 22px; font-weight: 800; color: var(--o); }
+    .oh-stat-label { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--mu); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .oh-note { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mu); margin-bottom: 16px; }
+
+    .oh-table { width: 100%; border-collapse: collapse; background: var(--w); border: 1.5px solid var(--sb); }
+    .oh-table thead { background: var(--bg2); }
+    .oh-table th { text-align: left; padding: 10px 14px; font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 500; color: var(--mu); text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1.5px solid var(--sb); }
+    .oh-table td { padding: 12px 14px; border-bottom: 1px solid var(--sb); font-size: 13px; vertical-align: middle; }
+    .oh-table tbody tr.row-main { cursor: pointer; }
+    .oh-table tbody tr.row-main:hover { background: var(--ol); }
+    .oh-table tbody tr.row-detail { display: none; }
+    .oh-table tbody tr.row-detail.open { display: table-row; }
+    .oh-table tbody tr.row-detail td { background: var(--bg2); padding: 20px; }
+
+    .oh-name { font-weight: 700; color: var(--k); font-size: 14px; }
+    .oh-startdate { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--s); }
+    .oh-startdate.empty { color: var(--mu); font-style: italic; }
+    .oh-tenure { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--k); }
+    .oh-milestone { font-size: 12px; }
+    .oh-milestone-date { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--k); font-weight: 600; }
+    .oh-milestone-label { font-size: 11px; color: var(--s); }
+    .oh-milestone.soon .oh-milestone-date { color: var(--o); }
+    .oh-milestone.overdue .oh-milestone-date { color: #cc3300; }
+    .oh-salary { font-family: 'DM Mono', monospace; font-weight: 700; font-size: 14px; color: var(--k); }
+    .oh-salary.empty { color: var(--mu); font-weight: 400; font-style: italic; font-size: 12px; }
+    .oh-growth { font-family: 'DM Mono', monospace; font-size: 12px; font-weight: 700; }
+    .oh-growth.up { color: #2d8a3e; }
+    .oh-growth.flat { color: var(--mu); }
+    .oh-expand { color: var(--o); font-size: 12px; font-weight: 700; text-align: center; }
+
+    .oh-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    .oh-detail-block { background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 16px; }
+    .oh-detail-title { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--mu); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; font-weight: 500; }
+    .oh-history-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .oh-history-table th { text-align: left; padding: 6px 8px; font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 500; color: var(--mu); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--sb); }
+    .oh-history-table td { padding: 8px; border-bottom: 1px solid var(--sb); }
+    .oh-history-table .amount { font-family: 'DM Mono', monospace; font-weight: 700; }
+    .oh-history-table .change.up { color: #2d8a3e; font-family: 'DM Mono', monospace; font-size: 11px; }
+    .oh-history-table .change.flat { color: var(--mu); font-family: 'DM Mono', monospace; font-size: 11px; }
+    .oh-history-table .note { color: var(--s); font-size: 11px; }
+    .btn-del { background: transparent; border: none; color: #cc3300; cursor: pointer; font-size: 14px; padding: 2px 6px; font-weight: 700; }
+    .btn-del:hover { color: #a32800; }
+
+    .oh-forms { display: flex; flex-direction: column; gap: 16px; }
+    .oh-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+    .oh-form-field { display: flex; flex-direction: column; gap: 4px; }
+    .oh-form-field label { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--mu); text-transform: uppercase; letter-spacing: 0.08em; }
+    .oh-form input { background: var(--w); border: 1.5px solid var(--sb); color: var(--k); padding: 6px 10px; border-radius: 3px; font-size: 13px; font-family: inherit; }
+    .oh-form input:focus { outline: none; border-color: var(--o); }
+    .btn-save { background: var(--o); color: var(--w); border: none; padding: 7px 14px; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: 700; font-family: inherit; }
+    .btn-save:hover { background: var(--od); }
+    .btn-save:disabled { background: var(--sb); cursor: not-allowed; }
+    .oh-form-msg { font-size: 11px; margin-top: 4px; font-weight: 600; }
+    .oh-form-msg.success { color: #2d8a3e; }
+    .oh-form-msg.error { color: #cc3300; }
+
+    .oh-chart-wrap { position: relative; height: 220px; }
+    .oh-milestone-list { list-style: none; padding: 0; margin: 0; }
+    .oh-milestone-list li { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--sb); font-size: 12px; }
+    .oh-milestone-list li:last-child { border-bottom: none; }
+    .oh-milestone-list .m-label { color: var(--s); }
+    .oh-milestone-list .m-date { font-family: 'DM Mono', monospace; color: var(--k); font-weight: 600; }
+    .oh-milestone-list .m-away { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mu); margin-left: 8px; }
+    .oh-milestone-list li.soon .m-date { color: var(--o); }
+    .oh-milestone-list li.past .m-date { color: var(--mu); text-decoration: line-through; }
+
+    .oh-mobile { display: none; }
+    .oh-mcard { background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 14px; margin-bottom: 10px; }
+    .oh-mcard-head { display: flex; justify-content: space-between; margin-bottom: 8px; }
+    .oh-mcard-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 12px; }
+    .oh-mcard-row .k { color: var(--mu); font-family: 'DM Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .oh-mcard-row .v { color: var(--k); font-weight: 600; }
+    .oh-mcard-expand { color: var(--o); font-size: 12px; font-weight: 700; margin-top: 8px; cursor: pointer; display: inline-block; }
+    .oh-mcard-detail { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--sb); }
+    .oh-mcard-detail.open { display: block; }
+
+    @media (max-width: 900px) {
+      .oh-table.desktop { display: none; }
+      .oh-mobile { display: block; }
+      .oh-detail-grid { grid-template-columns: 1fr; gap: 16px; }
+    }
+  </style>
+
+  <div class="oh-header">
+    <h1>Overheads</h1>
+    <div class="oh-header-actions">
+      <span class="oh-note" id="ohStatus"></span>
+      <button class="btn-lock" onclick="ohLogout()">Lock</button>
+    </div>
+  </div>
+
+  <div class="oh-stats" id="ohStats"></div>
+  <div class="oh-note">Salary changes save to data/staff.json — commit to git to persist across Railway deploys.</div>
+  <div id="ohError"></div>
+  <div id="ohContent"><div class="loading">Loading staff...</div></div>
+
+  <script>
+    let ohStaff = [];
+    const ohCharts = new Map();
+
+    function ohGbp(v) {
+      if (v == null) return '—';
+      return '\u00a3' + Math.round(v).toLocaleString();
+    }
+
+    function ohEsc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+
+    function ohMilestoneClass(daysAway) {
+      if (daysAway == null) return '';
+      if (daysAway < 0) return 'overdue';
+      if (daysAway <= 30) return 'soon';
+      return '';
+    }
+
+    function ohDaysAwayLabel(daysAway) {
+      if (daysAway == null) return '';
+      if (daysAway === 0) return 'today';
+      if (daysAway > 0) return 'in ' + daysAway + 'd';
+      return Math.abs(daysAway) + 'd ago';
+    }
+
+    async function ohLoad() {
+      try {
+        const res = await fetch('/api/overheads/staff');
+        if (res.status === 401) { location.reload(); return; }
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        ohStaff = data.staff;
+        ohRender();
+      } catch (err) {
+        document.getElementById('ohError').innerHTML = '<div class="error">' + ohEsc(err.message) + '</div>';
+        document.getElementById('ohContent').innerHTML = '';
+      }
+    }
+
+    function ohRender() {
+      renderOhStats();
+      renderOhTable();
+      renderOhMobile();
+    }
+
+    function renderOhStats() {
+      const total = ohStaff.length;
+      const currentSum = ohStaff.reduce((s, x) => s + (x.currentSalary || 0), 0);
+      const startingSum = ohStaff.reduce((s, x) => s + (x.startingSalary || 0), 0);
+      const withStart = ohStaff.filter(x => x.startDate).length;
+      const growthPct = startingSum > 0 ? Math.round(((currentSum - startingSum) / startingSum) * 1000) / 10 : null;
+      document.getElementById('ohStats').innerHTML =
+        '<div class="oh-stat"><div class="oh-stat-value">' + total + '</div><div class="oh-stat-label">Team Size</div></div>' +
+        '<div class="oh-stat"><div class="oh-stat-value">' + ohGbp(currentSum) + '</div><div class="oh-stat-label">Annual Salary Bill</div></div>' +
+        '<div class="oh-stat"><div class="oh-stat-value">' + ohGbp(currentSum / 12) + '</div><div class="oh-stat-label">Monthly Cost</div></div>' +
+        (growthPct != null ? '<div class="oh-stat"><div class="oh-stat-value">' + (growthPct >= 0 ? '+' : '') + growthPct + '%</div><div class="oh-stat-label">Team-wide Growth</div></div>' : '') +
+        (withStart < total ? '<div class="oh-stat"><div class="oh-stat-value" style="color:#cc3300">' + (total - withStart) + '</div><div class="oh-stat-label">Missing Start Date</div></div>' : '');
+    }
+
+    function renderOhTable() {
+      const rows = ohStaff.map(s => {
+        const next = s.milestones?.next;
+        const mClass = next ? ohMilestoneClass(next.daysAway) : '';
+        const growth = (s.growthPct == null) ? '—' : ((s.growthPct >= 0 ? '+' : '') + s.growthPct + '%');
+        const growthClass = s.growthPct == null ? 'flat' : (s.growthPct > 0 ? 'up' : 'flat');
+        return '<tr class="row-main" data-id="' + s.id + '" onclick="ohToggle(\\'' + s.id + '\\')">' +
+          '<td><div class="oh-name">' + ohEsc(s.name) + '</div></td>' +
+          '<td>' + (s.startDate
+              ? '<span class="oh-startdate">' + s.startDate + '</span>'
+              : '<span class="oh-startdate empty">not set</span>') + '</td>' +
+          '<td><span class="oh-tenure">' + (s.tenure || '—') + '</span></td>' +
+          '<td>' + (next
+              ? '<div class="oh-milestone ' + mClass + '"><div class="oh-milestone-date">' + next.date + '</div><div class="oh-milestone-label">' + next.label + ' · ' + ohDaysAwayLabel(next.daysAway) + '</div></div>'
+              : '<span class="oh-startdate empty">—</span>') + '</td>' +
+          '<td><span class="oh-salary' + (s.startingSalary == null ? ' empty' : '') + '">' + (s.startingSalary == null ? 'not set' : ohGbp(s.startingSalary)) + '</span></td>' +
+          '<td><span class="oh-salary' + (s.currentSalary == null ? ' empty' : '') + '">' + (s.currentSalary == null ? 'not set' : ohGbp(s.currentSalary)) + '</span></td>' +
+          '<td><span class="oh-growth ' + growthClass + '">' + growth + '</span></td>' +
+          '<td class="oh-expand">▼</td>' +
+        '</tr>' +
+        '<tr class="row-detail" data-detail="' + s.id + '"><td colspan="8">' + detailBlock(s) + '</td></tr>';
+      }).join('');
+
+      document.getElementById('ohContent').innerHTML =
+        '<table class="oh-table desktop"><thead><tr>' +
+          '<th>Name</th><th>Start Date</th><th>Tenure</th><th>Next Milestone</th>' +
+          '<th>Starting</th><th>Current</th><th>Growth</th><th></th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table>' +
+        '<div class="oh-mobile" id="ohMobile"></div>';
+    }
+
+    function renderOhMobile() {
+      const html = ohStaff.map(s => {
+        const next = s.milestones?.next;
+        const mClass = next ? ohMilestoneClass(next.daysAway) : '';
+        const growth = (s.growthPct == null) ? '—' : ((s.growthPct >= 0 ? '+' : '') + s.growthPct + '%');
+        return '<div class="oh-mcard" data-id="' + s.id + '">' +
+          '<div class="oh-mcard-head"><div class="oh-name">' + ohEsc(s.name) + '</div>' +
+            '<div class="oh-growth ' + (s.growthPct > 0 ? 'up' : 'flat') + '">' + growth + '</div></div>' +
+          '<div class="oh-mcard-row"><span class="k">Start</span><span class="v">' + (s.startDate || '—') + '</span></div>' +
+          '<div class="oh-mcard-row"><span class="k">Tenure</span><span class="v">' + (s.tenure || '—') + '</span></div>' +
+          '<div class="oh-mcard-row"><span class="k">Current</span><span class="v">' + (s.currentSalary == null ? '—' : ohGbp(s.currentSalary)) + '</span></div>' +
+          (next ? '<div class="oh-mcard-row"><span class="k">Next</span><span class="v ' + mClass + '">' + next.date + ' · ' + ohDaysAwayLabel(next.daysAway) + '</span></div>' : '') +
+          '<a class="oh-mcard-expand" onclick="ohToggleMobile(\\'' + s.id + '\\')">Manage ▼</a>' +
+          '<div class="oh-mcard-detail" data-detail-m="' + s.id + '">' + detailBlock(s) + '</div>' +
+        '</div>';
+      }).join('');
+      const el = document.getElementById('ohMobile');
+      if (el) el.innerHTML = html;
+    }
+
+    function detailBlock(s) {
+      const history = (s.salaryHistory || []);
+      let historyRows;
+      if (history.length === 0) {
+        historyRows = '<tr><td colspan="5" style="color:var(--mu);font-style:italic;font-size:12px;">No salary entries yet. Add the starting salary below.</td></tr>';
+      } else {
+        historyRows = history.map((h, i) => {
+          const prev = i > 0 ? history[i-1].amount : null;
+          const diff = prev != null ? h.amount - prev : null;
+          const pct = prev != null && prev > 0 ? Math.round(((h.amount - prev) / prev) * 1000) / 10 : null;
+          const change = (diff == null) ? '<span class="change flat">start</span>'
+            : (diff === 0) ? '<span class="change flat">no change</span>'
+            : '<span class="change up">+' + ohGbp(diff) + (pct != null ? ' (+' + pct + '%)' : '') + '</span>';
+          return '<tr>' +
+            '<td>' + h.date + '</td>' +
+            '<td class="amount">' + ohGbp(h.amount) + '</td>' +
+            '<td>' + change + '</td>' +
+            '<td class="note">' + ohEsc(h.note || '') + '</td>' +
+            '<td style="text-align:right"><button class="btn-del" title="Delete" onclick="ohDeleteSalary(\\'' + s.id + '\\',' + i + ')">×</button></td>' +
+          '</tr>';
+        }).join('');
+      }
+
+      const milestones = (s.milestones?.upcoming || []).map(m => {
+        const cls = m.daysAway < 0 ? 'past' : (m.daysAway <= 30 ? 'soon' : '');
+        return '<li class="' + cls + '"><span class="m-label">' + m.label + '</span>' +
+          '<span><span class="m-date">' + m.date + '</span><span class="m-away">' + ohDaysAwayLabel(m.daysAway) + '</span></span></li>';
+      }).join('');
+
+      return '<div class="oh-detail-grid">' +
+        '<div class="oh-detail-block">' +
+          '<div class="oh-detail-title">Salary History</div>' +
+          '<table class="oh-history-table"><thead><tr>' +
+            '<th>Date</th><th>Amount</th><th>Change</th><th>Note</th><th></th>' +
+          '</tr></thead><tbody>' + historyRows + '</tbody></table>' +
+          '<div class="oh-forms" style="margin-top:16px;">' +
+            '<div>' +
+              '<div class="oh-detail-title">Add Salary Entry</div>' +
+              '<div class="oh-form">' +
+                '<div class="oh-form-field"><label>Date</label><input type="date" id="sal-date-' + s.id + '"></div>' +
+                '<div class="oh-form-field"><label>Amount (\u00a3)</label><input type="number" min="0" step="500" id="sal-amt-' + s.id + '" placeholder="30000"></div>' +
+                '<div class="oh-form-field" style="flex:1;min-width:120px;"><label>Note</label><input type="text" id="sal-note-' + s.id + '" placeholder="e.g. 6mo review, promotion"></div>' +
+                '<button class="btn-save" onclick="ohAddSalary(\\'' + s.id + '\\')">Add</button>' +
+              '</div>' +
+              '<div class="oh-form-msg" id="sal-msg-' + s.id + '"></div>' +
+            '</div>' +
+            (!s.startDate ? '<div>' +
+              '<div class="oh-detail-title">Start Date (required for milestones)</div>' +
+              '<div class="oh-form">' +
+                '<div class="oh-form-field"><label>Date</label><input type="date" id="start-' + s.id + '"></div>' +
+                '<button class="btn-save" onclick="ohSaveStart(\\'' + s.id + '\\')">Save</button>' +
+              '</div>' +
+              '<div class="oh-form-msg" id="start-msg-' + s.id + '"></div>' +
+            '</div>' :
+            '<div>' +
+              '<div class="oh-detail-title">Start Date</div>' +
+              '<div class="oh-form">' +
+                '<div class="oh-form-field"><label>Date</label><input type="date" id="start-' + s.id + '" value="' + s.startDate + '"></div>' +
+                '<button class="btn-save" onclick="ohSaveStart(\\'' + s.id + '\\')">Update</button>' +
+              '</div>' +
+              '<div class="oh-form-msg" id="start-msg-' + s.id + '"></div>' +
+            '</div>') +
+          '</div>' +
+        '</div>' +
+        '<div class="oh-detail-block">' +
+          '<div class="oh-detail-title">Salary Growth</div>' +
+          (history.length >= 1
+            ? '<div class="oh-chart-wrap"><canvas id="chart-' + s.id + '"></canvas></div>'
+            : '<div style="color:var(--mu);font-style:italic;font-size:12px;">Add a salary entry to see the growth chart.</div>') +
+          '<div class="oh-detail-title" style="margin-top:20px;">Upcoming Milestones</div>' +
+          (milestones ? '<ul class="oh-milestone-list">' + milestones + '</ul>' : '<div style="color:var(--mu);font-style:italic;font-size:12px;">Set a start date to see milestones.</div>') +
+        '</div>' +
+      '</div>';
+    }
+
+    function ohToggle(id) {
+      const row = document.querySelector('tr.row-detail[data-detail="' + id + '"]');
+      if (!row) return;
+      const opening = !row.classList.contains('open');
+      row.classList.toggle('open', opening);
+      if (opening) {
+        const s = ohStaff.find(x => x.id === id);
+        setTimeout(() => renderChart(s, 'chart-' + id), 20);
+      }
+    }
+
+    function ohToggleMobile(id) {
+      const box = document.querySelector('[data-detail-m="' + id + '"]');
+      if (!box) return;
+      const opening = !box.classList.contains('open');
+      box.classList.toggle('open', opening);
+      if (opening) {
+        const s = ohStaff.find(x => x.id === id);
+        setTimeout(() => renderChart(s, 'chart-' + id), 20);
+      }
+    }
+
+    function renderChart(s, canvasId) {
+      const history = s.salaryHistory || [];
+      if (history.length === 0) return;
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      if (ohCharts.has(canvasId)) ohCharts.get(canvasId).destroy();
+
+      const points = history.map(h => ({ x: h.date, y: h.amount }));
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const last = history[history.length - 1];
+      if (last.date < todayIso) points.push({ x: todayIso, y: last.amount });
+
+      const chart = new Chart(canvas, {
+        type: 'line',
+        data: {
+          datasets: [{
+            label: s.name + ' salary',
+            data: points,
+            stepped: 'after',
+            borderColor: '#FF6700',
+            backgroundColor: 'rgba(255,103,0,0.12)',
+            borderWidth: 2,
+            fill: true,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            pointBackgroundColor: '#FF6700',
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => '\u00a3' + Math.round(ctx.parsed.y).toLocaleString(),
+              }
+            }
+          },
+          scales: {
+            x: { type: 'time', time: { unit: 'month', tooltipFormat: 'yyyy-MM-dd' }, grid: { display: false } },
+            y: {
+              beginAtZero: false,
+              ticks: { callback: v => '\u00a3' + Math.round(v).toLocaleString() },
+              grid: { color: '#E8E4DA' }
+            }
+          }
+        }
+      });
+      ohCharts.set(canvasId, chart);
+    }
+
+    async function ohAddSalary(id) {
+      const dateEl = document.getElementById('sal-date-' + id);
+      const amtEl = document.getElementById('sal-amt-' + id);
+      const noteEl = document.getElementById('sal-note-' + id);
+      const msg = document.getElementById('sal-msg-' + id);
+      msg.textContent = ''; msg.className = 'oh-form-msg';
+      const date = dateEl.value;
+      const amount = parseFloat(amtEl.value);
+      if (!date) { msg.textContent = 'Date required'; msg.classList.add('error'); return; }
+      if (!(amount > 0)) { msg.textContent = 'Amount must be > 0'; msg.classList.add('error'); return; }
+      try {
+        const res = await fetch('/api/overheads/staff/' + id + '/salary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date, amount, note: noteEl.value }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        msg.textContent = 'Saved'; msg.classList.add('success');
+        const idx = ohStaff.findIndex(x => x.id === id);
+        if (idx >= 0) ohStaff[idx] = data.staff;
+        const wasOpen = document.querySelector('tr.row-detail[data-detail="' + id + '"]')?.classList.contains('open');
+        const wasOpenM = document.querySelector('[data-detail-m="' + id + '"]')?.classList.contains('open');
+        ohRender();
+        if (wasOpen) ohToggle(id);
+        if (wasOpenM) ohToggleMobile(id);
+      } catch (err) {
+        msg.textContent = err.message; msg.classList.add('error');
+      }
+    }
+
+    async function ohSaveStart(id) {
+      const el = document.getElementById('start-' + id);
+      const msg = document.getElementById('start-msg-' + id);
+      msg.textContent = ''; msg.className = 'oh-form-msg';
+      const startDate = el.value;
+      if (!startDate) { msg.textContent = 'Date required'; msg.classList.add('error'); return; }
+      try {
+        const res = await fetch('/api/overheads/staff/' + id + '/start-date', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ startDate }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        msg.textContent = 'Saved'; msg.classList.add('success');
+        const idx = ohStaff.findIndex(x => x.id === id);
+        if (idx >= 0) ohStaff[idx] = data.staff;
+        const wasOpen = document.querySelector('tr.row-detail[data-detail="' + id + '"]')?.classList.contains('open');
+        const wasOpenM = document.querySelector('[data-detail-m="' + id + '"]')?.classList.contains('open');
+        ohRender();
+        if (wasOpen) ohToggle(id);
+        if (wasOpenM) ohToggleMobile(id);
+      } catch (err) {
+        msg.textContent = err.message; msg.classList.add('error');
+      }
+    }
+
+    async function ohDeleteSalary(id, index) {
+      if (!confirm('Delete this salary entry?')) return;
+      try {
+        const res = await fetch('/api/overheads/staff/' + id + '/salary/' + index, { method: 'DELETE' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        const idx = ohStaff.findIndex(x => x.id === id);
+        if (idx >= 0) ohStaff[idx] = data.staff;
+        const wasOpen = document.querySelector('tr.row-detail[data-detail="' + id + '"]')?.classList.contains('open');
+        const wasOpenM = document.querySelector('[data-detail-m="' + id + '"]')?.classList.contains('open');
+        ohRender();
+        if (wasOpen) ohToggle(id);
+        if (wasOpenM) ohToggleMobile(id);
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function ohLogout() {
+      await fetch('/api/overheads/logout', { method: 'POST' });
+      location.reload();
+    }
+
+    ohLoad();
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>`;
+}
+
+function overheadsLoginPage() {
+  return `
+  <style>
+    .oh-login { max-width: 360px; margin: 60px auto; background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 32px; }
+    .oh-login h1 { font-size: 20px; margin-bottom: 8px; }
+    .oh-login p { font-size: 13px; color: var(--s); margin-bottom: 20px; }
+    .oh-login label { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--mu); text-transform: uppercase; letter-spacing: 0.08em; display: block; margin-bottom: 6px; }
+    .oh-login input { width: 100%; background: var(--w); border: 1.5px solid var(--sb); color: var(--k); padding: 10px 12px; border-radius: 3px; font-size: 14px; font-family: inherit; }
+    .oh-login input:focus { outline: none; border-color: var(--o); }
+    .oh-login button { width: 100%; margin-top: 16px; background: var(--o); color: var(--w); border: none; padding: 12px; border-radius: 3px; cursor: pointer; font-size: 13px; font-weight: 700; font-family: inherit; text-transform: uppercase; letter-spacing: 0.04em; }
+    .oh-login button:hover { background: var(--od); }
+    .oh-login button:disabled { background: var(--sb); }
+    .oh-login-msg { font-size: 12px; color: #cc3300; margin-top: 10px; font-weight: 600; min-height: 16px; }
+  </style>
+
+  <div class="oh-login">
+    <h1>Overheads</h1>
+    <p>This section is password-protected because it contains salary information.</p>
+    <form onsubmit="ohLogin(event)">
+      <label for="ohPw">Password</label>
+      <input type="password" id="ohPw" autofocus autocomplete="current-password">
+      <button type="submit" id="ohLoginBtn">Unlock</button>
+      <div class="oh-login-msg" id="ohLoginMsg"></div>
+    </form>
+  </div>
+
+  <script>
+    async function ohLogin(e) {
+      e.preventDefault();
+      const pw = document.getElementById('ohPw').value;
+      const btn = document.getElementById('ohLoginBtn');
+      const msg = document.getElementById('ohLoginMsg');
+      msg.textContent = '';
+      btn.disabled = true; btn.textContent = 'Checking...';
+      try {
+        const res = await fetch('/api/overheads/auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pw }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Incorrect password');
+        location.reload();
+      } catch (err) {
+        msg.textContent = err.message;
+        btn.disabled = false; btn.textContent = 'Unlock';
+      }
+    }
   </script>`;
 }

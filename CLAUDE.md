@@ -160,6 +160,9 @@ ZOHO_API_BASE=https://www.zohoapis.eu/invoice/v3
 
 # Server
 PORT=3000
+DASH_PASSWORD=                      # dashboard basic-auth password
+DASH_PASSWORD_OVERHEADS=            # extra password for Overheads tab (salary data)
+STAFF_DB_PATH=                      # optional override for data/staff.json (use a Railway volume path to persist across deploys)
 ```
 
 ## Running Locally
@@ -176,8 +179,8 @@ PORT=3457 node --env-file=.env src/index.js
 - **Railway**: eoelatjy.up.railway.app
 - **Custom domain**: https://zoho.nodegroup.co.uk
 - **DNS**: CNAME on Netlify (zoho → eoelatjy.up.railway.app)
-- **Auth**: HTTP Basic Auth on dashboard (DASH_PASSWORD env var). MCP endpoints unauthenticated.
-- **Env vars on Railway**: TEAMHOOD_* (5), ZOHO_* (5), PORT, DASH_PASSWORD
+- **Auth**: HTTP Basic Auth on dashboard (DASH_PASSWORD env var). Overheads tab requires a second password (DASH_PASSWORD_OVERHEADS, cookie-based, 12h). MCP endpoints unauthenticated.
+- **Env vars on Railway**: TEAMHOOD_* (5), ZOHO_* (5), PORT, DASH_PASSWORD, DASH_PASSWORD_OVERHEADS
 
 ## Live Quotes Tab
 
@@ -186,6 +189,17 @@ Second tab showing sent/accepted Zoho estimates not yet marked for invoicing.
 - Quote removed from view after marking
 - Sorted by most recent first
 - Shows sub total (main) and total inc. VAT (secondary)
+
+## Overheads Tab
+
+Password-protected staff/salary tracker for the current design team (Noam, Derek, Lorcan, Fereshteh, Mariana, Klea).
+- Data lives in `data/staff.json` (path overridable via `STAFF_DB_PATH`)
+- Second password: `DASH_PASSWORD_OVERHEADS` env var (fallback `overheads`)
+- Auth is a signed cookie (sha256 of password), 12-hour expiry, `HttpOnly` + `SameSite=Strict`
+- API: `POST /api/overheads/auth`, `GET/PUT/POST/DELETE /api/overheads/staff/...`
+- Milestones computed from start date: probation end at +3 months, then reviews every 6 months
+- Salary history stored as `[{date, amount, note}]`; growth chart is a stepped line
+- **Railway caveat**: writes go to the filesystem — on Railway the container filesystem is ephemeral, so edits made in production are lost on next deploy unless `STAFF_DB_PATH` points to a mounted volume. For now, edit locally and commit.
 
 ## Styling
 
