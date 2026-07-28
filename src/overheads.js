@@ -146,6 +146,18 @@ export function addSalaryEntry(id, { date, amount, note }) {
   return computeStaffView(s, todayIso());
 }
 
+export function updateSalaryNote(id, index, note) {
+  const db = loadDb();
+  const s = db.staff.find(x => x.id === id);
+  if (!s) throw new Error(`Staff not found: ${id}`);
+  const history = [...(s.salaryHistory || [])].sort((a, b) => a.date.localeCompare(b.date));
+  if (index < 0 || index >= history.length) throw new Error('index out of range');
+  history[index] = { ...history[index], note: (note || '').slice(0, 200) };
+  s.salaryHistory = history;
+  saveDb(db);
+  return computeStaffView(s, todayIso());
+}
+
 export function deleteSalaryEntry(id, index) {
   const db = loadDb();
   const s = db.staff.find(x => x.id === id);

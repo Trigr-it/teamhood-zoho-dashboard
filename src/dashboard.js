@@ -13,6 +13,7 @@ import {
   listStaff,
   updateStartDate,
   addSalaryEntry,
+  updateSalaryNote,
   deleteSalaryEntry,
   overheadsPassword,
   isAuthorized as isOverheadsAuthorized,
@@ -522,6 +523,15 @@ export function createDashboardRouter() {
   router.post('/api/overheads/staff/:id/salary', requireOverheadsAuth, (req, res) => {
     try {
       const view = addSalaryEntry(req.params.id, req.body || {});
+      res.json({ success: true, staff: view });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  router.patch('/api/overheads/staff/:id/salary/:index/note', requireOverheadsAuth, (req, res) => {
+    try {
+      const view = updateSalaryNote(req.params.id, parseInt(req.params.index, 10), req.body?.note || '');
       res.json({ success: true, staff: view });
     } catch (err) {
       res.status(400).json({ success: false, error: err.message });
@@ -2223,6 +2233,16 @@ function overheadsPage({ authed }) {
     .oh-history-table .note { color: var(--s); font-size: 11px; }
     .btn-del { background: transparent; border: none; color: #cc3300; cursor: pointer; font-size: 14px; padding: 2px 6px; font-weight: 700; }
     .btn-del:hover { color: #a32800; }
+    .note-edit-link { color: var(--o); font-size: 10px; font-family: 'DM Mono', monospace; text-transform: uppercase; letter-spacing: 0.06em; cursor: pointer; margin-left: 6px; font-weight: 600; opacity: 0; transition: opacity 0.15s; }
+    tr:hover .note-edit-link { opacity: 1; }
+    .note-edit-input { background: var(--w); border: 1.5px solid var(--o); color: var(--k); padding: 4px 6px; border-radius: 3px; font-size: 12px; font-family: inherit; width: 100%; min-width: 140px; }
+    .note-edit-input:focus { outline: none; }
+    .note-edit-actions { display: inline-flex; gap: 4px; margin-left: 6px; }
+    .note-btn { background: transparent; border: none; cursor: pointer; font-size: 14px; padding: 2px 4px; font-weight: 700; font-family: inherit; }
+    .note-btn.save { color: #2d8a3e; }
+    .note-btn.save:hover { color: #1e6a2b; }
+    .note-btn.cancel { color: var(--s); }
+    .note-btn.cancel:hover { color: var(--k); }
 
     .oh-forms { display: flex; flex-direction: column; gap: 16px; }
     .oh-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
@@ -2288,6 +2308,12 @@ function overheadsPage({ authed }) {
 
     function ohEsc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
 
+    function ohFmtDate(iso) {
+      if (!iso) return '—';
+      const m = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(iso);
+      return m ? m[3] + '/' + m[2] + '/' + m[1] : iso;
+    }
+
     function ohMilestoneClass(daysAway) {
       if (daysAway == null) return '';
       if (daysAway < 0) return 'overdue';
@@ -2345,11 +2371,11 @@ function overheadsPage({ authed }) {
         return '<tr class="row-main" data-id="' + s.id + '" onclick="ohToggle(\\'' + s.id + '\\')">' +
           '<td><div class="oh-name">' + ohEsc(s.name) + '</div></td>' +
           '<td>' + (s.startDate
-              ? '<span class="oh-startdate">' + s.startDate + '</span>'
+              ? '<span class="oh-startdate">' + ohFmtDate(s.startDate) + '</span>'
               : '<span class="oh-startdate empty">not set</span>') + '</td>' +
           '<td><span class="oh-tenure">' + (s.tenure || '—') + '</span></td>' +
           '<td>' + (next
-              ? '<div class="oh-milestone ' + mClass + '"><div class="oh-milestone-date">' + next.date + '</div><div class="oh-milestone-label">' + next.label + ' · ' + ohDaysAwayLabel(next.daysAway) + '</div></div>'
+              ? '<div class="oh-milestone ' + mClass + '"><div class="oh-milestone-date">' + ohFmtDate(next.date) + '</div><div class="oh-milestone-label">' + next.label + ' · ' + ohDaysAwayLabel(next.daysAway) + '</div></div>'
               : '<span class="oh-startdate empty">—</span>') + '</td>' +
           '<td><span class="oh-salary' + (s.startingSalary == null ? ' empty' : '') + '">' + (s.startingSalary == null ? 'not set' : ohGbp(s.startingSalary)) + '</span></td>' +
           '<td><span class="oh-salary' + (s.currentSalary == null ? ' empty' : '') + '">' + (s.currentSalary == null ? 'not set' : ohGbp(s.currentSalary)) + '</span></td>' +
@@ -2375,10 +2401,10 @@ function overheadsPage({ authed }) {
         return '<div class="oh-mcard" data-id="' + s.id + '">' +
           '<div class="oh-mcard-head"><div class="oh-name">' + ohEsc(s.name) + '</div>' +
             '<div class="oh-growth ' + (s.growthPct > 0 ? 'up' : 'flat') + '">' + growth + '</div></div>' +
-          '<div class="oh-mcard-row"><span class="k">Start</span><span class="v">' + (s.startDate || '—') + '</span></div>' +
+          '<div class="oh-mcard-row"><span class="k">Start</span><span class="v">' + (s.startDate ? ohFmtDate(s.startDate) : '—') + '</span></div>' +
           '<div class="oh-mcard-row"><span class="k">Tenure</span><span class="v">' + (s.tenure || '—') + '</span></div>' +
           '<div class="oh-mcard-row"><span class="k">Current</span><span class="v">' + (s.currentSalary == null ? '—' : ohGbp(s.currentSalary)) + '</span></div>' +
-          (next ? '<div class="oh-mcard-row"><span class="k">Next</span><span class="v ' + mClass + '">' + next.date + ' · ' + ohDaysAwayLabel(next.daysAway) + '</span></div>' : '') +
+          (next ? '<div class="oh-mcard-row"><span class="k">Next</span><span class="v ' + mClass + '">' + ohFmtDate(next.date) + ' · ' + ohDaysAwayLabel(next.daysAway) + '</span></div>' : '') +
           '<a class="oh-mcard-expand" onclick="ohToggleMobile(\\'' + s.id + '\\')">Manage ▼</a>' +
           '<div class="oh-mcard-detail" data-detail-m="' + s.id + '">' + detailBlock(s) + '</div>' +
         '</div>';
@@ -2400,12 +2426,15 @@ function overheadsPage({ authed }) {
           const change = (diff == null) ? '<span class="change flat">start</span>'
             : (diff === 0) ? '<span class="change flat">no change</span>'
             : '<span class="change up">+' + ohGbp(diff) + (pct != null ? ' (+' + pct + '%)' : '') + '</span>';
-          return '<tr>' +
-            '<td>' + h.date + '</td>' +
+          return '<tr data-note-row="' + s.id + '-' + i + '">' +
+            '<td>' + ohFmtDate(h.date) + '</td>' +
             '<td class="amount">' + ohGbp(h.amount) + '</td>' +
             '<td>' + change + '</td>' +
-            '<td class="note">' + ohEsc(h.note || '') + '</td>' +
-            '<td style="text-align:right"><button class="btn-del" title="Delete" onclick="ohDeleteSalary(\\'' + s.id + '\\',' + i + ')">×</button></td>' +
+            '<td class="note" data-note-cell="' + s.id + '-' + i + '">' +
+              '<span class="note-view">' + (h.note ? ohEsc(h.note) : '<span style="color:var(--mu);font-style:italic">—</span>') + '</span>' +
+              ' <a class="note-edit-link" onclick="ohStartNoteEdit(\\'' + s.id + '\\',' + i + ',this)">edit</a>' +
+            '</td>' +
+            '<td style="text-align:right;white-space:nowrap"><button class="btn-del" title="Delete" onclick="ohDeleteSalary(\\'' + s.id + '\\',' + i + ')">×</button></td>' +
           '</tr>';
         }).join('');
       }
@@ -2413,7 +2442,7 @@ function overheadsPage({ authed }) {
       const milestones = (s.milestones?.upcoming || []).map(m => {
         const cls = m.daysAway < 0 ? 'past' : (m.daysAway <= 30 ? 'soon' : '');
         return '<li class="' + cls + '"><span class="m-label">' + m.label + '</span>' +
-          '<span><span class="m-date">' + m.date + '</span><span class="m-away">' + ohDaysAwayLabel(m.daysAway) + '</span></span></li>';
+          '<span><span class="m-date">' + ohFmtDate(m.date) + '</span><span class="m-away">' + ohDaysAwayLabel(m.daysAway) + '</span></span></li>';
       }).join('');
 
       return '<div class="oh-detail-grid">' +
@@ -2524,7 +2553,7 @@ function overheadsPage({ authed }) {
             }
           },
           scales: {
-            x: { type: 'time', time: { unit: 'month', tooltipFormat: 'yyyy-MM-dd' }, grid: { display: false } },
+            x: { type: 'time', time: { unit: 'month', tooltipFormat: 'dd/MM/yyyy' }, grid: { display: false } },
             y: {
               beginAtZero: false,
               ticks: { callback: v => '\u00a3' + Math.round(v).toLocaleString() },
@@ -2591,6 +2620,59 @@ function overheadsPage({ authed }) {
         if (wasOpenM) ohToggleMobile(id);
       } catch (err) {
         msg.textContent = err.message; msg.classList.add('error');
+      }
+    }
+
+    function ohStartNoteEdit(id, index, linkEl) {
+      const cell = linkEl.closest('[data-note-cell]');
+      if (!cell) return;
+      const s = ohStaff.find(x => x.id === id);
+      const current = (s && s.salaryHistory && s.salaryHistory[index]) ? (s.salaryHistory[index].note || '') : '';
+      cell.dataset.prev = cell.innerHTML;
+      cell.innerHTML = '<input class="note-edit-input" type="text" maxlength="200" value="' + ohEsc(current).replace(/"/g, '&quot;') + '">' +
+        '<span class="note-edit-actions">' +
+          '<button class="note-btn save" title="Save" onclick="ohSaveNote(\\'' + id + '\\',' + index + ')">✓</button>' +
+          '<button class="note-btn cancel" title="Cancel" onclick="ohCancelNote(\\'' + id + '\\',' + index + ')">×</button>' +
+        '</span>';
+      const input = cell.querySelector('.note-edit-input');
+      input.focus();
+      input.select();
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); ohSaveNote(id, index); }
+        else if (e.key === 'Escape') { e.preventDefault(); ohCancelNote(id, index); }
+      });
+    }
+
+    function ohCancelNote(id, index) {
+      const cell = document.querySelector('[data-note-cell="' + id + '-' + index + '"]');
+      if (!cell) return;
+      if (cell.dataset.prev != null) cell.innerHTML = cell.dataset.prev;
+      delete cell.dataset.prev;
+    }
+
+    async function ohSaveNote(id, index) {
+      const cell = document.querySelector('[data-note-cell="' + id + '-' + index + '"]');
+      if (!cell) return;
+      const input = cell.querySelector('.note-edit-input');
+      const note = input ? input.value : '';
+      try {
+        const res = await fetch('/api/overheads/staff/' + id + '/salary/' + index + '/note', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        const idx = ohStaff.findIndex(x => x.id === id);
+        if (idx >= 0) ohStaff[idx] = data.staff;
+        const wasOpen = document.querySelector('tr.row-detail[data-detail="' + id + '"]')?.classList.contains('open');
+        const wasOpenM = document.querySelector('[data-detail-m="' + id + '"]')?.classList.contains('open');
+        ohRender();
+        if (wasOpen) ohToggle(id);
+        if (wasOpenM) ohToggleMobile(id);
+      } catch (err) {
+        alert(err.message);
+        ohCancelNote(id, index);
       }
     }
 
