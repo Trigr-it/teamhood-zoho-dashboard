@@ -62,26 +62,25 @@ function tenureLabel(startIso, todayIsoStr) {
 
 function buildMilestones(startIso, todayIsoStr) {
   if (!startIso) return { probation: null, upcoming: [], next: null };
-  const probation = {
-    label: 'End of probation',
-    date: addMonths(startIso, 3),
-  };
-  probation.daysAway = daysBetween(todayIsoStr, probation.date);
 
-  // Anniversary milestones: 6, 12, 18... continuing 24 months past today
-  const milestones = [probation];
-  const horizonMonths = 96; // 8 years — plenty
-  for (let m = 6; m <= horizonMonths; m += 6) {
-    const date = addMonths(startIso, m);
-    const daysAway = daysBetween(todayIsoStr, date);
-    milestones.push({
-      label: m % 12 === 0 ? `${m / 12}-year anniversary` : `${m}-month review`,
-      date,
-      daysAway,
-    });
-    if (daysAway > 730) break; // stop once ~2 years out
+  // Schedule: probation (3mo), 6mo, 1yr, 18mo, 2yr, then yearly.
+  const schedule = [
+    { label: 'End of probation', months: 3 },
+    { label: '6-month review', months: 6 },
+    { label: '1-year review', months: 12 },
+    { label: '18-month review', months: 18 },
+    { label: '2-year review', months: 24 },
+  ];
+  for (let y = 3; y <= 40; y++) {
+    schedule.push({ label: `${y}-year review`, months: y * 12 });
   }
 
+  const milestones = schedule.map(m => {
+    const date = addMonths(startIso, m.months);
+    return { label: m.label, date, daysAway: daysBetween(todayIsoStr, date) };
+  });
+
+  const probation = milestones[0];
   const upcoming = milestones.filter(m => m.daysAway >= -14).slice(0, 6);
   const next = upcoming.find(m => m.daysAway >= 0) || null;
 
