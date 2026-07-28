@@ -1,15 +1,33 @@
-import { readFileSync, writeFileSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPO_DEFAULT_PATH = join(__dirname, '../data/staff.json');
 
 function dbPath() {
-  return process.env.STAFF_DB_PATH || join(__dirname, '../data/staff.json');
+  return process.env.STAFF_DB_PATH || REPO_DEFAULT_PATH;
+}
+
+// On first boot with a fresh volume, the target file won't exist yet.
+// Seed it from the repo default so the tab isn't empty on first load.
+function ensureDbFile() {
+  const target = dbPath();
+  if (existsSync(target)) return;
+  try {
+    mkdirSync(dirname(target), { recursive: true });
+    const seed = existsSync(REPO_DEFAULT_PATH)
+      ? readFileSync(REPO_DEFAULT_PATH, 'utf-8')
+      : JSON.stringify({ staff: [] }, null, 2) + '\n';
+    writeFileSync(target, seed);
+  } catch {
+    // If seeding fails (permissions, etc.) loadDb() will fall through to empty
+  }
 }
 
 function loadDb() {
+  ensureDbFile();
   try {
     const raw = readFileSync(dbPath(), 'utf-8');
     const parsed = JSON.parse(raw);
@@ -20,7 +38,9 @@ function loadDb() {
 }
 
 function saveDb(db) {
-  writeFileSync(dbPath(), JSON.stringify(db, null, 2) + '\n');
+  const target = dbPath();
+  try { mkdirSync(dirname(target), { recursive: true }); } catch {}
+  writeFileSync(target, JSON.stringify(db, null, 2) + '\n');
 }
 
 // --- Date helpers ---------------------------------------------------------
