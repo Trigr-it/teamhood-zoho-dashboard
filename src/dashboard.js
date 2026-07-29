@@ -16,6 +16,10 @@ import {
   updateSalaryNote,
   updateSalaryEntry,
   deleteSalaryEntry,
+  listRecurring,
+  addRecurring,
+  updateRecurring,
+  deleteRecurring,
   overheadsPassword,
   isAuthorized as isOverheadsAuthorized,
   authCookieValue as overheadsAuthCookie,
@@ -552,6 +556,42 @@ export function createDashboardRouter() {
     try {
       const { view } = deleteSalaryEntry(req.params.id, parseInt(req.params.index, 10));
       res.json({ success: true, staff: view });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- API: Recurring expenses ---
+  router.get('/api/overheads/recurring', requireOverheadsAuth, (_req, res) => {
+    try {
+      res.json({ success: true, recurring: listRecurring() });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  router.post('/api/overheads/recurring', requireOverheadsAuth, (req, res) => {
+    try {
+      const entry = addRecurring(req.body || {});
+      res.json({ success: true, entry });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  router.put('/api/overheads/recurring/:id', requireOverheadsAuth, (req, res) => {
+    try {
+      const entry = updateRecurring(req.params.id, req.body || {});
+      res.json({ success: true, entry });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  router.delete('/api/overheads/recurring/:id', requireOverheadsAuth, (req, res) => {
+    try {
+      deleteRecurring(req.params.id);
+      res.json({ success: true });
     } catch (err) {
       res.status(400).json({ success: false, error: err.message });
     }
@@ -2259,6 +2299,14 @@ function overheadsPage({ authed }) {
     .oh-sortable.active { color: var(--o); }
     .sort-arrow { font-size: 9px; margin-left: 3px; color: var(--o); }
 
+    .oh-recurring-section { margin-top: 40px; padding-top: 24px; border-top: 1.5px solid var(--sb); }
+    .oh-section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .oh-section-header h2 { font-size: 16px; font-weight: 800; color: var(--o); letter-spacing: -0.01em; text-transform: uppercase; }
+    .oh-add-recurring { background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 16px; margin-top: 16px; }
+    .rec-monthly, .rec-yearly { font-family: 'DM Mono', monospace; font-weight: 700; font-size: 13px; color: var(--k); }
+    .rec-yearly { color: var(--s); font-size: 12px; }
+    .rec-empty { color: var(--mu); font-style: italic; font-size: 12px; padding: 12px; text-align: center; }
+
     .oh-forms { display: flex; flex-direction: column; gap: 16px; }
     .oh-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
     .oh-form-field { display: flex; flex-direction: column; gap: 4px; }
@@ -2308,9 +2356,26 @@ function overheadsPage({ authed }) {
   </div>
 
   <div class="oh-stats" id="ohStats"></div>
-  <div class="oh-note">Salary changes save to data/staff.json — commit to git to persist across Railway deploys.</div>
   <div id="ohError"></div>
   <div id="ohContent"><div class="loading">Loading staff...</div></div>
+
+  <div class="oh-recurring-section">
+    <div class="oh-section-header">
+      <h2>Recurring Expenses</h2>
+    </div>
+    <div class="oh-stats" id="ohRecurringStats"></div>
+    <div id="ohRecurringContent"><div class="loading">Loading expenses...</div></div>
+    <div class="oh-add-recurring">
+      <div class="oh-detail-title">Add Recurring Expense</div>
+      <div class="oh-form">
+        <div class="oh-form-field" style="min-width:200px;"><label>Name</label><input type="text" id="recName" placeholder="e.g. Software subscription"></div>
+        <div class="oh-form-field"><label>Monthly (£)</label><input type="number" min="0" step="0.01" id="recMonthly" oninput="ohSyncFromMonthly('recMonthly','recYearly')"></div>
+        <div class="oh-form-field"><label>Yearly (£)</label><input type="number" min="0" step="0.01" id="recYearly" oninput="ohSyncFromYearly('recYearly','recMonthly')"></div>
+        <button class="btn-save" onclick="ohAddRecurring()">Add</button>
+      </div>
+      <div class="oh-form-msg" id="recMsg"></div>
+    </div>
+  </div>
 
   <script>
     let ohStaff = [];
@@ -2772,12 +2837,209 @@ function overheadsPage({ authed }) {
       }
     }
 
+    // --- Recurring expenses -------------------------------------------------
+    let ohRecurring = [];
+
+    async function ohLoadRecurring() {
+      try {
+        const res = await fetch('/api/overheads/recurring');
+        if (res.status === 401) { location.reload(); return; }
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        ohRecurring = data.recurring;
+        renderRecurringStats();
+        renderRecurringTable();
+      } catch (err) {
+        document.getElementById('ohRecurringContent').innerHTML = '<div class="error">' + ohEsc(err.message) + '</div>';
+      }
+    }
+
+    function renderRecurringStats() {
+      const totalMonthly = ohRecurring.reduce((s, r) => s + r.monthly, 0);
+      document.getElementById('ohRecurringStats').innerHTML =
+        '<div class="oh-stat"><div class="oh-stat-value">' + ohRecurring.length + '</div><div class="oh-stat-label">Entries</div></div>' +
+        '<div class="oh-stat"><div class="oh-stat-value">' + ohGbp(totalMonthly) + '</div><div class="oh-stat-label">Monthly Total</div></div>' +
+        '<div class="oh-stat"><div class="oh-stat-value">' + ohGbp(totalMonthly * 12) + '</div><div class="oh-stat-label">Yearly Total</div></div>';
+    }
+
+    function renderRecurringTable() {
+      const el = document.getElementById('ohRecurringContent');
+      if (ohRecurring.length === 0) {
+        el.innerHTML = '<div class="rec-empty">No recurring expenses yet. Add one below.</div>';
+        return;
+      }
+      const rows = ohRecurring.slice().sort((a, b) => a.name.localeCompare(b.name)).map(r =>
+        '<tr data-rec-row="' + r.id + '">' +
+          '<td>' + ohEsc(r.name) + '</td>' +
+          '<td class="rec-monthly">' + ohGbp(r.monthly) + '</td>' +
+          '<td class="rec-yearly">' + ohGbp(r.yearly) + '</td>' +
+          '<td style="text-align:right;white-space:nowrap">' +
+            '<button class="btn-edit" title="Edit" onclick="ohEditRecurring(\\'' + r.id + '\\')">✎</button>' +
+            ' <button class="btn-del" title="Delete" onclick="ohDeleteRecurring(\\'' + r.id + '\\')">×</button>' +
+          '</td>' +
+        '</tr>'
+      ).join('');
+      el.innerHTML =
+        '<table class="oh-table"><thead><tr>' +
+          '<th>Name</th><th>Monthly</th><th>Yearly</th><th></th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table>';
+    }
+
+    function ohSyncFromMonthly(fromId, toId) {
+      const from = document.getElementById(fromId);
+      const to = document.getElementById(toId);
+      if (!from || !to) return;
+      const v = parseFloat(from.value);
+      to.value = isFinite(v) ? (v * 12).toFixed(2) : '';
+      from.dataset.src = '1'; to.dataset.src = '';
+    }
+
+    function ohSyncFromYearly(fromId, toId) {
+      const from = document.getElementById(fromId);
+      const to = document.getElementById(toId);
+      if (!from || !to) return;
+      const v = parseFloat(from.value);
+      to.value = isFinite(v) ? (v / 12).toFixed(2) : '';
+      from.dataset.src = '1'; to.dataset.src = '';
+    }
+
+    function ohSyncElsFromMonthly(monthlyEl, yearlyEl) {
+      const v = parseFloat(monthlyEl.value);
+      yearlyEl.value = isFinite(v) ? (v * 12).toFixed(2) : '';
+      monthlyEl.dataset.src = '1'; yearlyEl.dataset.src = '';
+    }
+    function ohSyncElsFromYearly(monthlyEl, yearlyEl) {
+      const v = parseFloat(yearlyEl.value);
+      monthlyEl.value = isFinite(v) ? (v / 12).toFixed(2) : '';
+      yearlyEl.dataset.src = '1'; monthlyEl.dataset.src = '';
+    }
+
+    async function ohAddRecurring() {
+      const nameEl = document.getElementById('recName');
+      const monthlyEl = document.getElementById('recMonthly');
+      const yearlyEl = document.getElementById('recYearly');
+      const msg = document.getElementById('recMsg');
+      msg.className = 'oh-form-msg'; msg.textContent = '';
+      const name = nameEl.value.trim();
+      const monthlyVal = parseFloat(monthlyEl.value);
+      const yearlyVal = parseFloat(yearlyEl.value);
+      if (!name) { msg.className = 'oh-form-msg error'; msg.textContent = 'Name required'; return; }
+      const hasMonthly = isFinite(monthlyVal) && monthlyVal > 0;
+      const hasYearly = isFinite(yearlyVal) && yearlyVal > 0;
+      if (!hasMonthly && !hasYearly) {
+        msg.className = 'oh-form-msg error'; msg.textContent = 'Amount required'; return;
+      }
+      const yearlySrc = yearlyEl.dataset.src === '1';
+      const payload = (yearlySrc && hasYearly)
+        ? { name, amount: yearlyVal, frequency: 'yearly' }
+        : { name, amount: monthlyVal || (yearlyVal / 12), frequency: hasMonthly ? 'monthly' : 'monthly' };
+      try {
+        const res = await fetch('/api/overheads/recurring', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        nameEl.value = ''; monthlyEl.value = ''; yearlyEl.value = '';
+        monthlyEl.dataset.src = ''; yearlyEl.dataset.src = '';
+        ohRecurring.push(data.entry);
+        renderRecurringStats();
+        renderRecurringTable();
+        msg.className = 'oh-form-msg success'; msg.textContent = 'Added';
+      } catch (err) {
+        msg.className = 'oh-form-msg error'; msg.textContent = err.message;
+      }
+    }
+
+    function ohEditRecurring(id) {
+      const row = document.querySelector('tr[data-rec-row="' + id + '"]');
+      if (!row) return;
+      const r = ohRecurring.find(x => x.id === id);
+      if (!r) return;
+      row.dataset.prev = row.innerHTML;
+      const nameAttr = ohEsc(r.name).replace(/"/g, '&quot;');
+      row.innerHTML =
+        '<td><input class="edit-in" type="text" value="' + nameAttr + '" data-field="name"></td>' +
+        '<td><input class="edit-in" type="number" min="0" step="0.01" value="' + r.monthly.toFixed(2) + '" data-field="monthly"></td>' +
+        '<td><input class="edit-in" type="number" min="0" step="0.01" value="' + r.yearly.toFixed(2) + '" data-field="yearly"></td>' +
+        '<td style="text-align:right;white-space:nowrap">' +
+          '<button class="note-btn save" title="Save" onclick="ohSaveRecurring(\\'' + id + '\\')">✓</button>' +
+          '<button class="note-btn cancel" title="Cancel" onclick="ohCancelRecurring(\\'' + id + '\\')">×</button>' +
+        '</td>';
+      const monthlyEl = row.querySelector('[data-field="monthly"]');
+      const yearlyEl = row.querySelector('[data-field="yearly"]');
+      if (r.frequency === 'yearly') { yearlyEl.dataset.src = '1'; } else { monthlyEl.dataset.src = '1'; }
+      monthlyEl.addEventListener('input', function() { ohSyncElsFromMonthly(monthlyEl, yearlyEl); });
+      yearlyEl.addEventListener('input', function() { ohSyncElsFromYearly(monthlyEl, yearlyEl); });
+      row.querySelectorAll('input').forEach(inp => {
+        inp.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') { e.preventDefault(); ohSaveRecurring(id); }
+          else if (e.key === 'Escape') { e.preventDefault(); ohCancelRecurring(id); }
+        });
+      });
+      const first = row.querySelector('input');
+      if (first) { first.focus(); first.select(); }
+    }
+
+    function ohCancelRecurring(id) {
+      const row = document.querySelector('tr[data-rec-row="' + id + '"]');
+      if (!row) return;
+      if (row.dataset.prev != null) row.innerHTML = row.dataset.prev;
+      delete row.dataset.prev;
+    }
+
+    async function ohSaveRecurring(id) {
+      const row = document.querySelector('tr[data-rec-row="' + id + '"]');
+      if (!row) return;
+      const name = row.querySelector('[data-field="name"]').value.trim();
+      const monthlyEl = row.querySelector('[data-field="monthly"]');
+      const yearlyEl = row.querySelector('[data-field="yearly"]');
+      const monthlyVal = parseFloat(monthlyEl.value);
+      const yearlyVal = parseFloat(yearlyEl.value);
+      if (!name) { alert('Name required'); return; }
+      const yearlySrc = yearlyEl.dataset.src === '1';
+      const payload = yearlySrc
+        ? { name, amount: yearlyVal, frequency: 'yearly' }
+        : { name, amount: monthlyVal, frequency: 'monthly' };
+      try {
+        const res = await fetch('/api/overheads/recurring/' + id, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        const idx = ohRecurring.findIndex(x => x.id === id);
+        if (idx >= 0) ohRecurring[idx] = data.entry;
+        renderRecurringStats();
+        renderRecurringTable();
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function ohDeleteRecurring(id) {
+      if (!confirm('Delete this recurring expense?')) return;
+      try {
+        const res = await fetch('/api/overheads/recurring/' + id, { method: 'DELETE' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        ohRecurring = ohRecurring.filter(x => x.id !== id);
+        renderRecurringStats();
+        renderRecurringTable();
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
     async function ohLogout() {
       await fetch('/api/overheads/logout', { method: 'POST' });
       location.reload();
     }
 
     ohLoad();
+    ohLoadRecurring();
   </script>
 
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>`;

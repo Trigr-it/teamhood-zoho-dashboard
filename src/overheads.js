@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_DEFAULT_PATH = join(__dirname, '../data/staff.json');
@@ -31,9 +31,12 @@ function loadDb() {
   try {
     const raw = readFileSync(dbPath(), 'utf-8');
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed.staff) ? parsed : { staff: [] };
+    return {
+      staff: Array.isArray(parsed.staff) ? parsed.staff : [],
+      recurring: Array.isArray(parsed.recurring) ? parsed.recurring : [],
+    };
   } catch {
-    return { staff: [] };
+    return { staff: [], recurring: [] };
   }
 }
 
@@ -203,6 +206,65 @@ export function deleteSalaryEntry(id, index) {
   s.salaryHistory = history.filter((_, i) => i !== index);
   saveDb(db);
   return { view: computeStaffView(s, todayIso()), removed };
+}
+
+// --- Recurring expenses ---------------------------------------------------
+
+function computeRecurringView(e) {
+  const amount = Number(e.amount) || 0;
+  const monthly = e.frequency === 'yearly' ? amount / 12 : amount;
+  const yearly = e.frequency === 'yearly' ? amount : amount * 12;
+  return {
+    id: e.id,
+    name: e.name,
+    amount,
+    frequency: e.frequency,
+    monthly,
+    yearly,
+  };
+}
+
+function normaliseRecurringInput({ name, amount, frequency }) {
+  const cleanName = (name || '').trim();
+  if (!cleanName) throw new Error('name required');
+  if (cleanName.length > 100) throw new Error('name too long');
+  const amt = Number(amount);
+  if (!Number.isFinite(amt) || amt <= 0) throw new Error('amount must be a positive number');
+  if (frequency !== 'monthly' && frequency !== 'yearly') throw new Error('frequency must be "monthly" or "yearly"');
+  return { name: cleanName, amount: amt, frequency };
+}
+
+export function listRecurring() {
+  const db = loadDb();
+  return db.recurring.map(computeRecurringView);
+}
+
+export function addRecurring(input) {
+  const { name, amount, frequency } = normaliseRecurringInput(input);
+  const db = loadDb();
+  const entry = { id: randomUUID(), name, amount, frequency };
+  db.recurring.push(entry);
+  saveDb(db);
+  return computeRecurringView(entry);
+}
+
+export function updateRecurring(id, input) {
+  const { name, amount, frequency } = normaliseRecurringInput(input);
+  const db = loadDb();
+  const idx = db.recurring.findIndex(e => e.id === id);
+  if (idx < 0) throw new Error(`Recurring expense not found: ${id}`);
+  db.recurring[idx] = { id, name, amount, frequency };
+  saveDb(db);
+  return computeRecurringView(db.recurring[idx]);
+}
+
+export function deleteRecurring(id) {
+  const db = loadDb();
+  const before = db.recurring.length;
+  db.recurring = db.recurring.filter(e => e.id !== id);
+  if (db.recurring.length === before) throw new Error(`Recurring expense not found: ${id}`);
+  saveDb(db);
+  return true;
 }
 
 // --- Auth -----------------------------------------------------------------
