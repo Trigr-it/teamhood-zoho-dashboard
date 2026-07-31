@@ -180,7 +180,8 @@ PORT=3457 node --env-file=.env src/index.js
 - **Custom domain**: https://zoho.nodegroup.co.uk
 - **DNS**: CNAME on Netlify (zoho → eoelatjy.up.railway.app)
 - **Auth**: HTTP Basic Auth on dashboard (DASH_PASSWORD env var). Overheads tab requires a second password (DASH_PASSWORD_OVERHEADS, cookie-based, 12h). MCP endpoints unauthenticated.
-- **Env vars on Railway**: TEAMHOOD_* (5), ZOHO_* (5), PORT, DASH_PASSWORD, DASH_PASSWORD_OVERHEADS
+- **Env vars on Railway**: TEAMHOOD_* (5), ZOHO_* (5), PORT, DASH_PASSWORD, DASH_PASSWORD_OVERHEADS, STAFF_DB_PATH (=/data/staff.json)
+- **Railway volume**: mounted at `/data` (50 GB, oversized — see feedback memory). Backs the Overheads store so writes survive redeploys. Anything else that needs persistence should live under `/data/`.
 
 ## Live Quotes Tab
 
@@ -192,14 +193,16 @@ Second tab showing sent/accepted Zoho estimates not yet marked for invoicing.
 
 ## Overheads Tab
 
-Password-protected staff/salary tracker for the current design team (Noam, Derek, Lorcan, Fereshteh, Mariana, Klea).
-- Data lives in `data/staff.json` (path overridable via `STAFF_DB_PATH`)
+Password-protected staff/salary + recurring-expense tracker for the current design team (Noam, Derek, Lorcan, Fereshteh, Mariana, Klea).
+- Data lives in `staff.json` at `STAFF_DB_PATH` (Railway: `/data/staff.json` on the mounted volume — see Deployment) with a repo-committed default at `data/staff.json` that seeds the volume on first boot.
 - Second password: `DASH_PASSWORD_OVERHEADS` env var (fallback `overheads`)
 - Auth is a signed cookie (sha256 of password), 12-hour expiry, `HttpOnly` + `SameSite=Strict`
-- API: `POST /api/overheads/auth`, `GET/PUT/POST/DELETE /api/overheads/staff/...`
-- Milestones computed from start date: probation end at +3 months, then reviews every 6 months
-- Salary history stored as `[{date, amount, note}]`; growth chart is a stepped line
-- **Railway caveat**: writes go to the filesystem — on Railway the container filesystem is ephemeral, so edits made in production are lost on next deploy unless `STAFF_DB_PATH` points to a mounted volume. For now, edit locally and commit.
+- Milestones computed from start date: probation (+3mo), 6mo, 1yr, 18mo, 2yr, then yearly reviews from year 3 onwards
+- Salary history stored as `[{date, amount, note}]`; each row is inline-editable (pencil ✎). Growth chart is a monotone-cubic curve.
+- Main staff table is click-to-sort on every column (arrow indicator; nulls sort to end).
+- Recurring expenses stored as `[{id, name, amount, frequency}]` where `frequency` is `"monthly"` or `"yearly"`; the frequency records which figure the user actually entered so no floating-point drift on display.
+- API: `POST /api/overheads/auth`, `GET/PUT/POST/DELETE /api/overheads/staff/...`, `GET/POST /api/overheads/recurring`, `PUT/DELETE /api/overheads/recurring/:id`
+- Dates rendered as `DD/MM/YYYY` everywhere; storage stays ISO `YYYY-MM-DD`.
 
 ## Styling
 
