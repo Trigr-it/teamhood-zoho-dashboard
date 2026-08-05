@@ -15,6 +15,15 @@ const SALESPERSON = {
   POWERED_IE: '70776000005368119', // Powered Design - Ireland
 };
 
+// Design line item IDs in Zoho — rate (£85/hr) lives on the item itself.
+// Pass item_id so Zoho uses the stored rate; quantity = hours.
+const DESIGN_ITEM = {
+  UK:       '70776000000235025', // - Design & Analysis (UK)
+  IE:       '70776000004595327', // - Design & Analysis (IE)
+  HOIST:    '70776000004921904', // - Design & Analysis (Hoist)
+  CAT_III:  '70776000000291001', // - CAT III Design Check
+};
+
 // Site Visit line item (added when Teamhood "Site Visit" checkbox is ticked)
 const SITE_VISIT_ITEM = {
   item_id: '70776000000030113',
@@ -459,18 +468,24 @@ function getLineItemDescription(scope, cardDescription, cardTitle, clientName) {
 function buildCardLineItem(card, parsed, isIreland, customerName) {
   const catIII = isCatIIICard(card.title, parsed.scope);
   const hoist = !catIII && isHoistCard(card.title, parsed.scope, card.description);
-  let lineItemName;
+  let lineItemName, itemId;
   if (catIII) {
     lineItemName = '- CAT III Design Check';
+    itemId = DESIGN_ITEM.CAT_III;
   } else if (hoist) {
     lineItemName = '- Design & Analysis (Hoist)';
+    itemId = DESIGN_ITEM.HOIST;
+  } else if (isIreland) {
+    lineItemName = '- Design & Analysis (IE)';
+    itemId = DESIGN_ITEM.IE;
   } else {
-    lineItemName = isIreland ? '- Design & Analysis (IE)' : '- Design & Analysis (UK)';
+    lineItemName = '- Design & Analysis (UK)';
+    itemId = DESIGN_ITEM.UK;
   }
   const lineItemDescription = getLineItemDescription(parsed.scope, card.description, card.title, customerName);
   const siteVisit = (card.customFields || []).find(f => f.name === 'Site Visit')?.value === 'true';
   const clientContact = (card.customFields || []).find(f => f.name === 'Client Contact')?.value || '';
-  return { lineItemName, lineItemDescription, siteVisit, clientContact };
+  return { itemId, lineItemName, lineItemDescription, siteVisit, clientContact };
 }
 
 /**
@@ -560,7 +575,7 @@ export async function createQuickQuote({ template, clientCode, project }) {
   };
 }
 
-export async function approveCard(cardId, { rate, quantity = 1 }) {
+export async function approveCard(cardId, { quantity = 1 }) {
   // 1. Fetch card
   const card = await teamhoodApi.getCard(cardId);
   if (!card) throw new Error(`Card not found: ${cardId}`);
@@ -601,7 +616,7 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
   }
 
   // 4. Build line item (name, description) + extract custom fields
-  const { lineItemName, lineItemDescription, siteVisit, clientContact } =
+  const { itemId, lineItemName, lineItemDescription, siteVisit, clientContact } =
     buildCardLineItem(card, parsed, isIreland, client.customerName);
 
   // 5. Build reference: "Site Name - Short Scope"
@@ -610,12 +625,12 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
   // 6. Salesperson
   const salespersonId = isIreland ? SALESPERSON.IE : SALESPERSON.UK;
 
-  // 7. Create draft estimate
+  // 7. Create draft estimate — item_id pulls rate from the Zoho item; quantity = hours
   const lineItems = [{
+    item_id: itemId,
     name: lineItemName,
     description: lineItemDescription,
     quantity,
-    rate: rate || 0,
     tax_id: isIreland ? ZERO_TAX_ID : DEFAULT_TAX_ID,
   }];
 
@@ -665,7 +680,6 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
     projectName: parsed.siteName,
     reference,
     displayId: card.displayId,
-    rate,
     isIreland,
     tagRemoved,
   };
@@ -676,7 +690,7 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
  *
  * @param {string} primaryCardId - The card whose Approve button was clicked.
  *                                 Used for site/project routing, reference, and PO number fallback order.
- * @param {Array<{cardId: string, rate: number, quantity?: number}>} cards
+ * @param {Array<{cardId: string, quantity?: number}>} cards
  * @returns Combined result with per-card tag-removal status.
  */
 export async function approveCombined(primaryCardId, cards) {
@@ -689,10 +703,9 @@ export async function approveCombined(primaryCardId, cards) {
   const missing = fetched.findIndex(c => !c);
   if (missing >= 0) throw new Error(`Card not found: ${cards[missing].cardId}`);
 
-  // Pair each fetched card with its rate/quantity, parsed title, etc.
+  // Pair each fetched card with its quantity (hours) and parsed title.
   const items = fetched.map((card, i) => ({
     card,
-    rate: cards[i].rate || 0,
     quantity: cards[i].quantity || 1,
     parsed: parseCardTitle(card.title),
   }));
@@ -754,10 +767,10 @@ export async function approveCombined(primaryCardId, cards) {
     if (built.siteVisit) anySiteVisit = true;
     if (!poNumber && built.clientContact) poNumber = built.clientContact;
     lineItems.push({
+      item_id: built.itemId,
       name: built.lineItemName,
       description: built.lineItemDescription,
       quantity: it.quantity,
-      rate: it.rate,
       tax_id: taxId,
     });
   }

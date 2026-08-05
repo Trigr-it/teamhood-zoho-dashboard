@@ -142,10 +142,9 @@ export function createDashboardRouter() {
   // --- API: Approve a card → create Zoho estimate ---
   router.post('/api/cards/:cardId/approve', async (req, res) => {
     try {
-      const { rate, quantity, lineItemName, lineItemDescription } = req.body;
+      const { quantity, lineItemName, lineItemDescription } = req.body;
       const result = await approveCard(req.params.cardId, {
-        rate: parseFloat(rate) || 0,
-        quantity: parseInt(quantity) || 1,
+        quantity: parseFloat(quantity) || 1,
         lineItemName,
         lineItemDescription,
       });
@@ -164,8 +163,7 @@ export function createDashboardRouter() {
       }
       const normalized = cards.map(c => ({
         cardId: c.cardId,
-        rate: parseFloat(c.rate) || 0,
-        quantity: parseInt(c.quantity) || 1,
+        quantity: parseFloat(c.quantity) || 1,
       }));
       const result = await approveCombined(primaryCardId, normalized);
       res.json(result);
@@ -524,6 +522,34 @@ export function createDashboardRouter() {
         pipeline,
         filterOptions: { clients, salespersons },
       });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- API: Quote reference DB for client-side search ---
+  router.get('/api/quotes/search-data', (_req, res) => {
+    try {
+      const db = loadQuoteDb();
+      const quotes = db.map(q => ({
+        estimateNumber: q.estimate_number,
+        date: q.date,
+        status: q.status,
+        client: q.client,
+        project: q.project,
+        reference: q.reference,
+        salesperson: q.salesperson,
+        subTotal: q.sub_total,
+        total: q.total,
+        lineItems: (q.line_items || []).map(li => ({
+          name: li.name,
+          description: li.description || '',
+          quantity: li.quantity,
+          rate: li.rate,
+          total: li.total,
+        })),
+      }));
+      res.json({ success: true, quotes });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -1264,9 +1290,8 @@ function pricingPage() {
       if (!q) return;
       const hours = readHours(id);
       if (hours <= 0) { alert('Please enter hours before approving.'); return; }
-      const rate = hours * 85;
       if (!q.zohoCustomerName) { alert('Cannot approve: client code "' + q.clientCode + '" is not mapped in client-identifiers.txt'); return; }
-      if (!confirm('Create Zoho draft estimate for ' + q.displayId + ' (' + q.zohoCustomerName + ') at ' + hours + 'hrs = ' + String.fromCharCode(163) + rate + '?')) return;
+      if (!confirm('Create Zoho draft estimate for ' + q.displayId + ' (' + q.zohoCustomerName + ') at ' + hours + 'hrs = ' + String.fromCharCode(163) + (hours * 85) + '?')) return;
 
       btn.disabled = true;
       btn.textContent = 'Creating...';
@@ -1277,7 +1302,7 @@ function pricingPage() {
         const res = await fetch('/api/cards/' + id + '/approve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rate, quantity: 1 }),
+          body: JSON.stringify({ quantity: hours }),
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error);
@@ -1298,7 +1323,7 @@ function pricingPage() {
       const items = ids.map(id => {
         const q = allQuotes.find(qq => qq.id === id);
         const hours = readHours(id);
-        return { id, q, hours, rate: hours * 85 };
+        return { id, q, hours };
       });
 
       const missing = items.find(it => !it.q);
@@ -1333,7 +1358,7 @@ function pricingPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             primaryCardId: primaryId,
-            cards: items.map(it => ({ cardId: it.id, rate: it.rate, quantity: 1 })),
+            cards: items.map(it => ({ cardId: it.id, quantity: it.hours })),
           }),
         });
         const data = await res.json();
