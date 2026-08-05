@@ -1,7 +1,7 @@
 import * as teamhoodApi from './teamhood/api.js';
 import { zohoRequest, buildQueryString } from './zoho/api.js';
 import { parseCardTitle } from './utils/title-parser.js';
-import { lookupClient } from './utils/client-lookup.js';
+import { lookupClient, isIrelandClient } from './utils/client-lookup.js';
 import { findSimilarQuotes } from './utils/quote-matcher.js';
 
 const DEFAULT_TAX_ID = '70776000000030063'; // Standard Rate VAT 20%
@@ -14,9 +14,6 @@ const SALESPERSON = {
   POWERED_UK: '70776000004849677', // Powered Design
   POWERED_IE: '70776000005368119', // Powered Design - Ireland
 };
-
-// Irish client codes (use IE salesperson + no VAT)
-const IE_CLIENT_CODES = new Set(['LAO', 'MSL', 'GCS', 'AIN', '3SC', 'BHL', 'GAB', 'GRP']);
 
 // Site Visit line item (added when Teamhood "Site Visit" checkbox is ticked)
 const SITE_VISIT_ITEM = {
@@ -489,7 +486,7 @@ export async function createQuickQuote({ template, clientCode, project }) {
     throw new Error(`Client code "${clientCode}" not found in client-identifiers.txt`);
   }
 
-  const isIreland = IE_CLIENT_CODES.has(clientCode.toUpperCase());
+  const isIreland = isIrelandClient(clientCode);
 
   // Find Zoho customer
   const contactSearch = await zohoRequest('GET', `/contacts?search_text=${encodeURIComponent(client.customerName)}`);
@@ -574,7 +571,7 @@ export async function approveCard(cardId, { rate, quantity = 1 }) {
     throw new Error(`Client code "${parsed.clientCode}" not found in client-identifiers.txt`);
   }
 
-  const isIreland = IE_CLIENT_CODES.has(parsed.clientCode);
+  const isIreland = isIrelandClient(parsed.clientCode);
 
   // 2. Find Zoho customer
   const contactSearch = await zohoRequest('GET', `/contacts?search_text=${encodeURIComponent(client.customerName)}`);
@@ -713,7 +710,7 @@ export async function approveCombined(primaryCardId, cards) {
   if (!client) {
     throw new Error(`Client code "${clientCode}" not found in client-identifiers.txt`);
   }
-  const isIreland = IE_CLIENT_CODES.has(clientCode);
+  const isIreland = isIrelandClient(clientCode);
 
   // 3. Identify the primary card (drives project routing + reference + PO fallback order)
   const primary = items.find(it => it.card.id === primaryCardId) || items[0];

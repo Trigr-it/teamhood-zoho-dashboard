@@ -10,6 +10,12 @@ import { findSimilarQuotes } from './utils/quote-matcher.js';
 import { approveCard, approveCombined, createQuickQuote } from './approve.js';
 import { getAllClients } from './utils/client-lookup.js';
 import {
+  listClients as listClientEntries,
+  addClient as addClientEntry,
+  updateClient as updateClientEntry,
+  deleteClient as deleteClientEntry,
+} from './clients.js';
+import {
   listStaff,
   updateStartDate,
   addSalaryEntry,
@@ -185,6 +191,42 @@ export function createDashboardRouter() {
       res.json({ success: true, clients });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- API: Manage client identifiers (Clients tab) ---
+  router.get('/api/clients/manage', (_req, res) => {
+    try {
+      res.json({ success: true, clients: listClientEntries() });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  router.post('/api/clients/manage', (req, res) => {
+    try {
+      const entry = addClientEntry(req.body || {});
+      res.json({ success: true, client: entry });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  router.put('/api/clients/manage/:code', (req, res) => {
+    try {
+      const entry = updateClientEntry(req.params.code, req.body || {});
+      res.json({ success: true, client: entry });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  router.delete('/api/clients/manage/:code', (req, res) => {
+    try {
+      deleteClientEntry(req.params.code);
+      res.json({ success: true });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
     }
   });
 
@@ -606,6 +648,7 @@ export function createDashboardRouter() {
   router.get('/overheads', (req, res) => res.send(pageShell('Overheads', 'overheads',
     '<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>',
     overheadsPage({ authed: isOverheadsAuthorized(req) }))));
+  router.get('/clients', (_req, res) => res.send(pageShell('Clients', 'clients', '', clientsPage())));
 
   return router;
 }
@@ -620,6 +663,7 @@ function pageShell(title, activeNav, headExtra, bodyContent) {
     { key: 'pricing', label: 'Pricing', href: '/pricing' },
     { key: 'live-quotes', label: 'Live Quotes', href: '/live-quotes' },
     { key: 'dashboard', label: 'Dashboard', href: '/dashboard' },
+    { key: 'clients', label: 'Clients', href: '/clients' },
     { key: 'overheads', label: 'Overheads', href: '/overheads' },
   ];
   const navHtml = navItems.map(n =>
@@ -3093,5 +3137,247 @@ function overheadsLoginPage() {
         btn.disabled = false; btn.textContent = 'Unlock';
       }
     }
+  </script>`;
+}
+
+// ---------------------------------------------------------------------------
+// Clients page — manage the client-identifier table (code → customer name, IE flag)
+// ---------------------------------------------------------------------------
+
+function clientsPage() {
+  return `
+  <style>
+    .cl-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; padding-bottom: 16px; border-bottom: 1.5px solid var(--sb); }
+    .cl-header .subtitle { margin-bottom: 0; }
+    .cl-count { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mu); text-transform: uppercase; letter-spacing: 0.08em; }
+    .cl-add { background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 14px 16px; margin-bottom: 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .cl-add label { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mu); text-transform: uppercase; letter-spacing: 0.08em; margin-right: 4px; }
+    .cl-add input[type="text"] { background: var(--bg); border: 1.5px solid var(--sb); color: var(--k); padding: 8px 10px; border-radius: 3px; font-size: 13px; font-family: inherit; }
+    .cl-add input:focus { outline: none; border-color: var(--o); }
+    .cl-add input.code { width: 80px; text-transform: uppercase; font-family: 'DM Mono', monospace; font-weight: 600; }
+    .cl-add input.name { flex: 1; min-width: 240px; }
+    .cl-add .ie { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--k); user-select: none; cursor: pointer; }
+    .cl-add .ie input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--o); cursor: pointer; }
+    .btn-primary { background: var(--o); color: var(--w); border: none; padding: 9px 18px; border-radius: 3px; cursor: pointer; font-size: 13px; font-weight: 700; font-family: inherit; transition: all 0.2s; }
+    .btn-primary:hover { background: var(--od); transform: translateY(-1px); }
+    .btn-primary:disabled { background: var(--sb); color: var(--mu); cursor: wait; transform: none; }
+    .btn-ghost { background: transparent; color: var(--s); border: 1.5px solid var(--sb); padding: 6px 12px; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: 600; font-family: inherit; }
+    .btn-ghost:hover { color: var(--k); border-color: var(--k); }
+    .cl-search { background: var(--w); border: 1.5px solid var(--sb); color: var(--k); padding: 8px 12px; border-radius: 3px; font-size: 13px; font-family: inherit; width: 260px; margin-bottom: 12px; }
+    .cl-search:focus { outline: none; border-color: var(--o); }
+    table.cl-table { width: 100%; border-collapse: collapse; background: var(--w); border: 1.5px solid var(--sb); }
+    table.cl-table thead { background: var(--bg2); }
+    table.cl-table th { text-align: left; padding: 10px 14px; font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 500; color: var(--mu); text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1.5px solid var(--sb); }
+    table.cl-table td { padding: 10px 14px; border-bottom: 1px solid var(--sb); font-size: 13px; vertical-align: middle; }
+    table.cl-table tr:hover td { background: var(--ol); }
+    .cl-code { font-family: 'DM Mono', monospace; font-weight: 700; color: var(--o); font-size: 13px; }
+    .cl-ie-badge { display: inline-block; padding: 2px 8px; border-radius: 2px; font-family: 'DM Mono', monospace; font-size: 9px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; background: #e6f4ea; color: #2d8a3e; }
+    .cl-actions { text-align: right; white-space: nowrap; }
+    .cl-actions button { background: none; border: none; cursor: pointer; padding: 4px 8px; font-size: 15px; color: var(--s); transition: color 0.15s; }
+    .cl-actions button:hover { color: var(--o); }
+    .cl-actions button.del:hover { color: #cc3300; }
+    .cl-edit-input { background: var(--bg); border: 1.5px solid var(--sb); color: var(--k); padding: 6px 8px; border-radius: 3px; font-size: 13px; font-family: inherit; width: 100%; }
+    .cl-edit-input.code { width: 80px; text-transform: uppercase; font-family: 'DM Mono', monospace; font-weight: 600; }
+    .cl-edit-input:focus { outline: none; border-color: var(--o); }
+    .cl-msg { padding: 10px 14px; border-radius: 3px; margin-bottom: 12px; font-size: 13px; }
+    .cl-msg.error { background: #fff0f0; border: 1.5px solid #cc3300; color: #cc3300; }
+    .cl-msg.ok { background: #e6f4ea; border: 1.5px solid #2d8a3e; color: #2d8a3e; }
+    @media (max-width: 700px) {
+      .cl-add { flex-direction: column; align-items: stretch; }
+      .cl-add input.code, .cl-add input.name { width: 100%; }
+      .cl-search { width: 100%; }
+    }
+  </style>
+
+  <div class="cl-header">
+    <div>
+      <h1>Clients</h1>
+      <div class="subtitle">Manage the client-code → Zoho customer mapping used by the approve workflow.</div>
+    </div>
+    <div class="cl-count" id="clCount"></div>
+  </div>
+
+  <div id="clMsg"></div>
+
+  <div class="cl-add">
+    <label>Code</label>
+    <input type="text" id="clNewCode" class="code" maxlength="5" placeholder="ABC">
+    <label>Client</label>
+    <input type="text" id="clNewName" class="name" placeholder="Company name (as it appears in Zoho)">
+    <label class="ie"><input type="checkbox" id="clNewIe"> Ireland (IE VAT + salesperson)</label>
+    <button class="btn-primary" id="clAddBtn" onclick="clAdd()">Add client</button>
+  </div>
+
+  <input type="text" class="cl-search" id="clSearch" placeholder="Search code or name..." oninput="clRender()">
+
+  <div id="clTableWrap"><div class="loading">Loading clients...</div></div>
+
+  <script>
+    let clAll = [];
+    let clEditing = null; // code being edited
+
+    function clShowMsg(text, kind) {
+      const el = document.getElementById('clMsg');
+      if (!text) { el.innerHTML = ''; return; }
+      el.innerHTML = '<div class="cl-msg ' + (kind || 'error') + '">' + escapeHtml(text) + '</div>';
+      if (kind === 'ok') setTimeout(() => { el.innerHTML = ''; }, 2500);
+    }
+
+    function escapeHtml(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    async function clLoad() {
+      try {
+        const res = await fetch('/api/clients/manage');
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Failed to load');
+        clAll = data.clients || [];
+        clRender();
+      } catch (err) {
+        document.getElementById('clTableWrap').innerHTML = '<div class="error">' + escapeHtml(err.message) + '</div>';
+      }
+    }
+
+    function clFiltered() {
+      const q = (document.getElementById('clSearch').value || '').trim().toLowerCase();
+      if (!q) return clAll;
+      return clAll.filter(c =>
+        c.code.toLowerCase().includes(q) || c.customerName.toLowerCase().includes(q)
+      );
+    }
+
+    function clRender() {
+      const rows = clFiltered();
+      document.getElementById('clCount').textContent =
+        rows.length === clAll.length
+          ? clAll.length + ' clients'
+          : rows.length + ' of ' + clAll.length + ' clients';
+
+      let html = '<table class="cl-table"><thead><tr>' +
+        '<th style="width:100px">Code</th>' +
+        '<th>Client name</th>' +
+        '<th style="width:120px">Region</th>' +
+        '<th style="width:120px" class="cl-actions">Actions</th>' +
+        '</tr></thead><tbody>';
+
+      if (rows.length === 0) {
+        html += '<tr><td colspan="4" style="text-align:center;color:var(--mu);padding:24px">No clients match.</td></tr>';
+      } else {
+        for (const c of rows) {
+          if (clEditing === c.code) {
+            html += '<tr>' +
+              '<td><span class="cl-code">' + escapeHtml(c.code) + '</span></td>' +
+              '<td><input type="text" class="cl-edit-input" id="clEditName" value="' + escapeHtml(c.customerName) + '"></td>' +
+              '<td><label class="ie" style="display:flex;align-items:center;gap:6px;font-size:12px">' +
+              '<input type="checkbox" id="clEditIe"' + (c.isIreland ? ' checked' : '') + ' style="accent-color:var(--o)"> IE</label></td>' +
+              '<td class="cl-actions">' +
+              '<button title="Save" onclick="clSaveEdit(\\''+c.code+'\\')">\u2713</button>' +
+              '<button title="Cancel" onclick="clCancelEdit()">\u2715</button>' +
+              '</td></tr>';
+          } else {
+            html += '<tr>' +
+              '<td><span class="cl-code">' + escapeHtml(c.code) + '</span></td>' +
+              '<td>' + escapeHtml(c.customerName) + '</td>' +
+              '<td>' + (c.isIreland ? '<span class="cl-ie-badge">Ireland</span>' : '<span style="color:var(--mu);font-family:\\'DM Mono\\',monospace;font-size:11px">UK</span>') + '</td>' +
+              '<td class="cl-actions">' +
+              '<button title="Edit" onclick="clStartEdit(\\''+c.code+'\\')">\u270E</button>' +
+              '<button class="del" title="Delete" onclick="clDelete(\\''+c.code+'\\')">\u00D7</button>' +
+              '</td></tr>';
+          }
+        }
+      }
+      html += '</tbody></table>';
+      document.getElementById('clTableWrap').innerHTML = html;
+    }
+
+    function clStartEdit(code) {
+      clEditing = code;
+      clRender();
+      const el = document.getElementById('clEditName');
+      if (el) { el.focus(); el.select(); }
+    }
+
+    function clCancelEdit() {
+      clEditing = null;
+      clRender();
+    }
+
+    async function clSaveEdit(code) {
+      const name = (document.getElementById('clEditName').value || '').trim();
+      const isIreland = document.getElementById('clEditIe').checked;
+      if (!name) { clShowMsg('Client name cannot be empty.'); return; }
+      try {
+        const res = await fetch('/api/clients/manage/' + encodeURIComponent(code), {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ customerName: name, isIreland }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Update failed');
+        const idx = clAll.findIndex(x => x.code === code);
+        if (idx >= 0) clAll[idx] = data.client;
+        clEditing = null;
+        clRender();
+        clShowMsg('Saved.', 'ok');
+      } catch (err) {
+        clShowMsg(err.message);
+      }
+    }
+
+    async function clDelete(code) {
+      if (!confirm('Delete client "' + code + '"? Existing cards for this client will fail to approve until the code is restored.')) return;
+      try {
+        const res = await fetch('/api/clients/manage/' + encodeURIComponent(code), { method: 'DELETE' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Delete failed');
+        clAll = clAll.filter(x => x.code !== code);
+        clRender();
+        clShowMsg('Deleted ' + code + '.', 'ok');
+      } catch (err) {
+        clShowMsg(err.message);
+      }
+    }
+
+    async function clAdd() {
+      const code = (document.getElementById('clNewCode').value || '').trim().toUpperCase();
+      const name = (document.getElementById('clNewName').value || '').trim();
+      const isIreland = document.getElementById('clNewIe').checked;
+      if (!code || !name) { clShowMsg('Both code and client name are required.'); return; }
+      const btn = document.getElementById('clAddBtn');
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/clients/manage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, customerName: name, isIreland }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Add failed');
+        clAll.push(data.client);
+        clAll.sort((a, b) => a.code.localeCompare(b.code));
+        document.getElementById('clNewCode').value = '';
+        document.getElementById('clNewName').value = '';
+        document.getElementById('clNewIe').checked = false;
+        document.getElementById('clNewCode').focus();
+        clRender();
+        clShowMsg('Added ' + data.client.code + '.', 'ok');
+      } catch (err) {
+        clShowMsg(err.message);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById('clNewCode').addEventListener('input', function(e) {
+      e.target.value = e.target.value.toUpperCase();
+    });
+    document.getElementById('clNewName').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') clAdd();
+    });
+
+    clLoad();
   </script>`;
 }

@@ -63,6 +63,7 @@ SGS   SG Scaffolding
 SHA   Shamrock Access
 STA   Statom Group
 SWI   Swift Scaffolding
+SUM   Summit Scaffolding
 TGS   TG Scaffolding
 UNI   Unison Scaffolding
 UPS   UP Scaffolding
