@@ -21,6 +21,8 @@ node-quote-system/
 │   ├── index.js              # Entry point: Express + MCP (SSE + streamable HTTP)
 │   ├── dashboard.js          # Dashboard HTML + API routes (Express Router)
 │   ├── approve.js            # Approve workflow: Teamhood card → Zoho estimate
+│   ├── clients.js            # Client-identifier store (volume-backed JSON, CRUD + isIrelandClient)
+│   ├── overheads.js          # Overheads store (volume-backed JSON)
 │   ├── teamhood/
 │   │   ├── api.js            # Teamhood API client (caching, pagination, ID resolution)
 │   │   └── tools.js          # 19 Teamhood MCP tools (McpServer.tool() API)
@@ -35,11 +37,13 @@ node-quote-system/
 │       ├── id-resolver.js    # UUID ↔ display ID resolution with cache
 │       └── html-strip.js     # HTML → plain text
 ├── data/
-│   └── quote_reference_db.json   # 637 past quotes for pricing intelligence
+│   ├── quote_reference_db.json   # 637 past quotes for pricing intelligence
+│   ├── clients.json              # Seed for the client-identifier store (68 clients)
+│   └── staff.json                # Seed for the Overheads staff store
 ├── scripts/
 │   ├── sync-quotes.js        # Incremental sync from Zoho (not yet converted to ESM)
 │   └── discover-ids.js       # Find Teamhood workspace/board UUIDs
-├── client-identifiers.txt    # Client code → Zoho customer name mapping (70+ entries)
+├── client-identifiers.txt    # DEPRECATED — historical only; the store in data/clients.json is the source of truth
 ├── package.json              # ESM, MCP SDK 1.29.0, Express, zod
 ├── railway.json              # Railway deployment config
 └── .env                      # Combined Teamhood + Zoho credentials
@@ -109,15 +113,15 @@ OAuth2 refresh token flow (EU region: `zoho.eu`)
 3. Same-client quotes prioritised (2x weight), scored by description similarity
 4. Suggested rate = score-weighted average, rounded to half-hours (£42.50 increments, £85/hr)
 5. User adjusts hours, clicks Approve
-6. `POST /api/cards/:id/approve`:
-   - Parse title → client code → lookup in `client-identifiers.txt`
+6. `POST /api/cards/:id/approve` — body is `{ quantity: hours }` (frontend sends hours, not rate):
+   - Parse title → client code → lookup in the clients store (`data/clients.json` → volume)
    - Search Zoho contacts by customer name → `customer_id`
    - Find or create Zoho project by site name
-   - Detect card type: CAT III first, then hoist, then scaffold (default)
+   - Detect card type: CAT III first, then hoist, then scaffold (default) — picks `DESIGN_ITEM.{CAT_III|HOIST|IE|UK}` item_id
    - Build line item description from template, populated with card data, fallback to reference quote
-   - Set salesperson (UK or IE based on client code)
+   - Set salesperson (UK or IE — `isIrelandClient(code)` from the clients store)
    - Set PO Number from Teamhood "Client Contact" custom field
-   - Create draft estimate on Zoho
+   - Create draft estimate on Zoho — line item carries `item_id` (Zoho pulls the £85 rate from the item) and `quantity` = hours
 
 ### Templates
 **Scaffold** — Title, Grid Lines, 3D Model, System, Load Class, Cladding, Ties, Length/Width/Height, Ancillaries
@@ -136,10 +140,15 @@ OAuth2 refresh token flow (EU region: `zoho.eu`)
 2. **Completed cards included** — design done ≠ pricing done
 3. **Archived cards excluded**
 4. **Always use `assignedUserId`** — never `ownerId` (owner = creator, not assignee)
-5. **Irish client codes**: LAO, MSL, GCS, AIN, 3SC, BHL, GAB, GRP → IE salesperson, Zero Rate VAT
-6. **Rates in half-hour increments** — all pricing based on hours × £85/hr
+5. **Irish client codes** → IE salesperson + Zero Rate VAT. Driven by the `isIreland` flag in the clients store (`data/clients.json` → volume, editable via `/clients` tab). Seed IE codes: LAO, MSL, GCS, AIN, 3SC, BHL, GAB.
+6. **Rates in half-hour increments** — all pricing based on hours × £85/hr. Zoho stores the £85 on the design item; the approve flow passes `item_id` + `quantity` (hours), never a raw rate.
 7. **Teamhood PUT needs `{ data: {} }` envelope** — approve flow auto-removes "Price Required" tag
-8. **Line item name**: "- Design & Analysis (UK)", "- Design & Analysis (IE)", "- Design & Analysis (Hoist)", or "- CAT III Design Check"
+8. **Line item name + item_id** — pairs live in `DESIGN_ITEM` in `src/approve.js`:
+   - `- Design & Analysis (UK)` → `70776000000235025`
+   - `- Design & Analysis (IE)` → `70776000004595327`
+   - `- Design & Analysis (Hoist)` → `70776000004921904`
+   - `- CAT III Design Check` → `70776000000291001`
+   - `- Site Visit` → `70776000000030113` (rate £200 on the item)
 
 ## Environment Variables
 
@@ -163,6 +172,7 @@ PORT=3000
 DASH_PASSWORD=                      # dashboard basic-auth password
 DASH_PASSWORD_OVERHEADS=            # extra password for Overheads tab (salary data)
 STAFF_DB_PATH=                      # optional override for data/staff.json (use a Railway volume path to persist across deploys)
+CLIENTS_DB_PATH=                    # optional override for data/clients.json (use a Railway volume path to persist across deploys)
 ```
 
 ## Running Locally
@@ -180,8 +190,8 @@ PORT=3457 node --env-file=.env src/index.js
 - **Custom domain**: https://zoho.nodegroup.co.uk
 - **DNS**: CNAME on Netlify (zoho → eoelatjy.up.railway.app)
 - **Auth**: HTTP Basic Auth on dashboard (DASH_PASSWORD env var). Overheads tab requires a second password (DASH_PASSWORD_OVERHEADS, cookie-based, 12h). MCP endpoints unauthenticated.
-- **Env vars on Railway**: TEAMHOOD_* (5), ZOHO_* (5), PORT, DASH_PASSWORD, DASH_PASSWORD_OVERHEADS, STAFF_DB_PATH (=/data/staff.json)
-- **Railway volume**: mounted at `/data` (50 GB, oversized — see feedback memory). Backs the Overheads store so writes survive redeploys. Anything else that needs persistence should live under `/data/`.
+- **Env vars on Railway**: TEAMHOOD_* (5), ZOHO_* (5), PORT, DASH_PASSWORD, DASH_PASSWORD_OVERHEADS, STAFF_DB_PATH (=/data/staff.json), CLIENTS_DB_PATH (=/data/clients.json)
+- **Railway volume**: mounted at `/data` (50 GB, oversized — see feedback memory). Backs the Overheads and Clients stores so writes survive redeploys. Anything else that needs persistence should live under `/data/`.
 
 ## Live Quotes Tab
 
@@ -190,6 +200,16 @@ Second tab showing sent/accepted Zoho estimates not yet marked for invoicing.
 - Quote removed from view after marking
 - Sorted by most recent first
 - Shows sub total (main) and total inc. VAT (secondary)
+
+## Clients Tab
+
+Editable client-identifier list. Add / inline-edit / delete client codes without a redeploy.
+- Data lives in `clients.json` at `CLIENTS_DB_PATH` (Railway: `/data/clients.json` on the mounted volume — see Deployment) with a repo-committed default at `data/clients.json` that seeds the volume on first boot.
+- Same auth as the rest of the dashboard (main `DASH_PASSWORD` basic-auth).
+- Each entry: `{ code, customerName, isIreland }`. The `isIreland` flag drives the IE salesperson + Zero Rate VAT routing in `approve.js` (via `isIrelandClient(code)` from `src/utils/client-lookup.js`).
+- Code validation: `^[A-Z0-9]{2,5}$`, uppercase, must be unique.
+- BFT exclusion is still hardcoded in `EXCLUDED_CLIENT_CODES` (dashboard.js + teamhood/tools.js), not driven by the UI.
+- API: `GET/POST /api/clients/manage`, `PUT/DELETE /api/clients/manage/:code`. The pre-existing `GET /api/clients` (used by the quick-quote dropdown) still filters out BFT.
 
 ## Overheads Tab
 
