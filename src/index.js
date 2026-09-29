@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { registerTeamhoodTools } from './teamhood/tools.js';
 import { registerZohoTools } from './zoho/tools.js';
 import { createDashboardRouter } from './dashboard.js';
+import { CARD_SOURCE } from './cards/source.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -62,7 +63,9 @@ app.get('/health', (_req, res) => {
     status: 'ok',
     server: 'node-quote-system',
     version: '1.0.0',
+    cardSource: CARD_SOURCE,
     teamhoodKey: !!process.env.TEAMHOOD_API_KEY,
+    kanbanKey: !!process.env.KANBAN_API_KEY,
     zohoKey: !!process.env.ZOHO_CLIENT_ID,
   });
 });

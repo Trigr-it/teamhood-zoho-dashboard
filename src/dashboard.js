@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import * as api from './teamhood/api.js';
+import * as api from './cards/source.js'; // Teamhood or Node Kanban, chosen by CARD_SOURCE
 import { zohoRequest } from './zoho/api.js';
 import { parseCardTitle } from './utils/title-parser.js';
 import { lookupClient } from './utils/client-lookup.js';
@@ -122,13 +122,11 @@ export function createDashboardRouter() {
     }
   });
 
-  // --- API: Proxy Teamhood attachment content (requires API key) ---
+  // --- API: Proxy attachment content from the card source (its API key never reaches the browser) ---
   router.get('/api/attachments/:id', async (req, res) => {
     try {
-      const attUrl = `${process.env.TEAMHOOD_API_BASE_URL || 'https://api-node.teamhood.com'}/api/v1/attachments/${req.params.id}/content`;
-      const attRes = await fetch(attUrl, {
-        headers: { 'X-ApiKey': process.env.TEAMHOOD_API_KEY },
-      });
+      // ?thumb=1 asks the Kanban board for its small jpeg preview (ignored by Teamhood).
+      const attRes = await api.getAttachmentContent(req.params.id, { thumb: req.query.thumb });
       if (!attRes.ok) return res.status(attRes.status).send('Attachment not found');
       res.set('Content-Type', attRes.headers.get('content-type') || 'application/octet-stream');
       res.set('Cache-Control', 'public, max-age=3600');
@@ -705,28 +703,34 @@ function pageShell(title, activeNav, headExtra, bodyContent) {
   <link rel="icon" type="image/png" href="/public/n-logo-orange.png">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
-    :root { --o:#FF6700; --od:#CC5200; --ol:#FFF0E6; --ob:#FFCAA8; --k:#1A1A1A; --w:#FFFFFF; --bg:#F7F6F2; --bg2:#F0EEE8; --sb:#D8D4C8; --s:#727272; --mu:#999990; }
+    :root { --o:#FF6700; --od:#CC5200; --ol:#FFF0E6; --ob:#FFCAA8; --k:#1A1A1A; --w:#FFFFFF; --bg:#F7F6F2; --bg2:#F0EEE8; --sb:#D8D4C8; --s:#727272; --mu:#999990; --mono:'DM Mono','Courier New',monospace; --radius:3px; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'DM Sans', 'Futura', 'Century Gothic', sans-serif; background: var(--bg); color: var(--k); line-height: 1.5; }
+    body { font-family: 'DM Sans', 'Futura', 'Century Gothic', sans-serif; background: var(--bg); color: var(--k); line-height: 1.5; -webkit-font-smoothing: antialiased; }
     a { color: var(--o); text-decoration: none; font-weight: 600; }
     a:hover { color: var(--od); }
-    .site-header { background: var(--w); border-bottom: 1.5px solid var(--sb); padding: 0 24px; display: flex; align-items: center; height: 56px; gap: 20px; }
-    .logo { display: flex; align-items: center; gap: 10px; text-decoration: none; }
-    .logo:hover { color: var(--k); }
-    .logo img { width: 32px; height: 32px; border-radius: 4px; }
-    .logo-text { font-size: 15px; font-weight: 800; color: var(--k); letter-spacing: -0.02em; text-transform: uppercase; }
-    .nav { display: flex; gap: 4px; margin-left: 24px; }
-    .nav-link { padding: 8px 14px; border-radius: 3px; font-size: 13px; font-weight: 600; color: var(--mu); transition: all 0.15s; text-transform: uppercase; letter-spacing: 0.04em; }
+    .site-header { display: flex; align-items: center; justify-content: space-between; padding: 0 52px; height: 64px; background: var(--bg); border-bottom: 1.5px solid var(--sb); box-shadow: inset 0 3px 0 0 var(--o); }
+    .nav-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+    .nav-brand:hover { color: var(--k); }
+    .nav-mark { width: 32px; height: 32px; border-radius: 4px; display: grid; place-items: center; flex-shrink: 0; transition: transform .2s; overflow: hidden; }
+    .nav-brand:hover .nav-mark { transform: rotate(6deg); }
+    .nav-mark img { width: 32px; height: 32px; object-fit: contain; }
+    .nav-word { font-size: 15px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--o); }
+    .nav-ref { font-family: var(--mono); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: var(--mu); margin-left: 2px; margin-top: 1px; }
+    .nav { display: flex; align-items: center; gap: 2px; }
+    .nav-link { font-family: inherit; background: none; border: none; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--s); padding: 7px 12px; border-radius: var(--radius); letter-spacing: .02em; text-decoration: none; transition: color .2s, background .2s; }
     .nav-link:hover { color: var(--k); background: var(--bg2); text-decoration: none; }
-    .nav-active { color: var(--o); background: var(--ol); }
+    .nav-link.nav-active { color: var(--o); }
     .page { padding: 24px; max-width: 1400px; margin: 0 auto; }
     h1 { font-size: 22px; font-weight: 800; color: var(--o); letter-spacing: -0.02em; text-transform: uppercase; }
     .subtitle { color: var(--s); margin-bottom: 20px; font-size: 14px; }
     .loading { text-align: center; padding: 60px; color: var(--mu); font-size: 14px; }
     .error { background: #fff0f0; border: 1.5px solid #cc3300; color: #cc3300; padding: 12px 16px; border-radius: 3px; margin-bottom: 16px; }
+    @media (max-width: 768px) {
+      .site-header { padding: 0 20px; }
+    }
     @media (max-width: 600px) {
-      .site-header { flex-wrap: wrap; height: auto; padding: 12px 16px; gap: 8px; }
-      .nav { margin-left: 0; gap: 2px; }
+      .site-header { flex-wrap: wrap; height: auto; padding: 12px 20px; gap: 8px; }
+      .nav { gap: 2px; }
       .nav-link { padding: 6px 10px; font-size: 11px; }
       .page { padding: 16px; }
     }
@@ -735,9 +739,12 @@ function pageShell(title, activeNav, headExtra, bodyContent) {
 </head>
 <body>
   <header class="site-header">
-    <a href="/" class="logo">
-      <img src="/public/n-logo-orange.png" alt="N">
-      <span class="logo-text">Node Group</span>
+    <a href="/" class="nav-brand">
+      <div class="nav-mark"><img src="/public/n-logo-orange.png" alt="Node Group"></div>
+      <div>
+        <div class="nav-word">Node Group</div>
+        <div class="nav-ref">Quotes</div>
+      </div>
     </a>
     <nav class="nav">${navHtml}</nav>
   </header>

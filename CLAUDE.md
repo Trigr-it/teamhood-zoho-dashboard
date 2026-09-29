@@ -23,9 +23,13 @@ node-quote-system/
 │   ├── approve.js            # Approve workflow: Teamhood card → Zoho estimate
 │   ├── clients.js            # Client-identifier store (volume-backed JSON, CRUD + isIrelandClient)
 │   ├── overheads.js          # Overheads store (volume-backed JSON)
+│   ├── cards/
+│   │   └── source.js         # Picks teamhood/api.js or kanban/api.js by CARD_SOURCE; dashboard + approve import from here
+│   ├── kanban/
+│   │   └── api.js            # Node Kanban client: same functions/card shape as teamhood/api.js, backed by the board's /api/pricing routes
 │   ├── teamhood/
 │   │   ├── api.js            # Teamhood API client (caching, pagination, ID resolution)
-│   │   └── tools.js          # 19 Teamhood MCP tools (McpServer.tool() API)
+│   │   └── tools.js          # 19 Teamhood MCP tools (McpServer.tool() API) — always Teamhood, not switched by CARD_SOURCE
 │   ├── zoho/
 │   │   ├── auth.js           # OAuth2 refresh token + org ID management (EU region)
 │   │   ├── api.js            # zohoRequest() helper with 429 retry
@@ -159,6 +163,12 @@ TEAMHOOD_API_BASE_URL=https://api-node.teamhood.com
 TEAMHOOD_WORKSPACE_ID=
 TEAMHOOD_BOARD_ID=
 TEAMHOOD_USER_MAP={}    # JSON: UUID → first name (8 designers)
+
+# Card source (2026-09-29): teamhood (default) or kanban. SWITCHED to kanban on the Railway service
+# on 2026-09-29 evening (the team moved to the Node Kanban board that day); Teamhood MCP tools stay on Teamhood.
+CARD_SOURCE=teamhood
+KANBAN_API_URL=https://kanban.nodegroup.co.uk
+KANBAN_API_KEY=         # = PRICING_API_KEY on the node-kanban Railway service
 
 # Zoho (EU)
 ZOHO_CLIENT_ID=

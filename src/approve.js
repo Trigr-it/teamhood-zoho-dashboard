@@ -1,4 +1,4 @@
-import * as teamhoodApi from './teamhood/api.js';
+import * as teamhoodApi from './cards/source.js'; // Teamhood or Node Kanban, chosen by CARD_SOURCE
 import { zohoRequest, buildQueryString } from './zoho/api.js';
 import { parseCardTitle } from './utils/title-parser.js';
 import { lookupClient, isIrelandClient } from './utils/client-lookup.js';

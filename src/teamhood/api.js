@@ -388,6 +388,14 @@ export async function getCardAttachments(cardId) {
   return unwrapItems(data);
 }
 
+/** Fetch one attachment's bytes for the dashboard proxy. Returns the fetch Response. */
+export async function getAttachmentContent(attachmentId) {
+  if (!API_KEY) throw new Error('TEAMHOOD_API_KEY environment variable is not set');
+  return fetch(`${BASE_URL}${V1}/attachments/${encodeURIComponent(attachmentId)}/content`, {
+    headers: { 'X-ApiKey': API_KEY },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Public API: Custom fields
 // ---------------------------------------------------------------------------
