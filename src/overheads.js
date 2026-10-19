@@ -571,6 +571,22 @@ export function moveStep(trackId, stepCode, direction) {
   return { tracks: trackViews(db) };
 }
 
+// Full reorder (drag and drop): `order` must list every step code on the track exactly once.
+export function reorderSteps(trackId, order) {
+  const db = loadDb();
+  const t = findTrack(db, trackId);
+  if (!Array.isArray(order)) throw new Error('order must be an array of step codes');
+  const codes = order.map(c => String(c || '').trim().toUpperCase());
+  const current = t.steps.map(l => l.step);
+  const valid = codes.length === current.length
+    && new Set(codes).size === codes.length
+    && codes.every(c => current.includes(c));
+  if (!valid) throw new Error('order must list every step on the track exactly once');
+  t.steps = codes.map(c => t.steps.find(l => l.step === c));
+  saveDb(db);
+  return { tracks: trackViews(db) };
+}
+
 export function deleteStep(trackId, stepCode) {
   const db = loadDb();
   const t = findTrack(db, trackId);

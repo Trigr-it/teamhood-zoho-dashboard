@@ -33,6 +33,7 @@ import {
   addStep,
   updateStep,
   moveStep,
+  reorderSteps,
   deleteStep,
   addStepPay,
   updateStepPay,
@@ -653,6 +654,7 @@ export function createDashboardRouter() {
   router.post('/api/overheads/ladder/tracks/:track/steps', requireOverheadsAuth, ladderRoute(req => addStep(req.params.track, req.body || {})));
   router.put('/api/overheads/ladder/tracks/:track/steps/:step', requireOverheadsAuth, ladderRoute(req => updateStep(req.params.track, req.params.step, req.body || {})));
   router.put('/api/overheads/ladder/tracks/:track/steps/:step/move', requireOverheadsAuth, ladderRoute(req => moveStep(req.params.track, req.params.step, req.body?.direction)));
+  router.put('/api/overheads/ladder/tracks/:track/order', requireOverheadsAuth, ladderRoute(req => reorderSteps(req.params.track, req.body?.order)));
   router.delete('/api/overheads/ladder/tracks/:track/steps/:step', requireOverheadsAuth, ladderRoute(req => deleteStep(req.params.track, req.params.step)));
   router.post('/api/overheads/ladder/tracks/:track/steps/:step/pay', requireOverheadsAuth, ladderRoute(req => addStepPay(req.params.track, req.params.step, req.body || {})));
   router.put('/api/overheads/ladder/tracks/:track/steps/:step/pay/:index', requireOverheadsAuth, ladderRoute(req => updateStepPay(req.params.track, req.params.step, parseInt(req.params.index, 10), req.body || {})));
@@ -2424,6 +2426,12 @@ function overheadsPage({ authed }) {
     .oh-explainer textarea { width: 100%; min-height: 220px; box-sizing: border-box; background: var(--w); border: 1.5px solid var(--o); color: var(--k); padding: 10px 12px; border-radius: 3px; font-size: 13px; line-height: 1.5; font-family: inherit; resize: vertical; }
     .oh-explainer textarea:focus { outline: none; }
     .oh-ladder-step { font-family: 'DM Mono', monospace; font-weight: 800; font-size: 14px; color: var(--o); }
+    .oh-drag-handle { width: 22px; color: var(--mu); cursor: grab; font-size: 15px; text-align: center; user-select: none; padding-left: 10px !important; padding-right: 2px !important; }
+    .oh-drag-handle:hover { color: var(--o); }
+    .oh-drag-handle:active { cursor: grabbing; }
+    tr.row-main.dragging { opacity: 0.35; }
+    tr.row-main.drop-before td { box-shadow: inset 0 2px 0 var(--o); }
+    tr.row-main.drop-after td { box-shadow: inset 0 -2px 0 var(--o); }
     .oh-ladder-grade { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mu); text-transform: uppercase; letter-spacing: 0.06em; }
     .oh-ladder-title { font-weight: 700; color: var(--k); font-size: 13px; }
     .oh-ladder-milestone { font-size: 12px; color: var(--s); line-height: 1.45; max-width: 420px; }
@@ -3021,21 +3029,25 @@ function overheadsPage({ authed }) {
         const below = idx > 0 ? t.steps[idx - 1].step : null;
         const key = t.id + '|' + l.step;
         const grade = ladderGradeName(l.grade);
-        return '<tr class="row-main" onclick="ladderToggle(\\'' + key + '\\')">' +
+        const kq = '\\'' + key + '\\'';
+        return '<tr class="row-main" draggable="true" data-step-key="' + key + '" onclick="ladderToggle(' + kq + ')"' +
+            ' ondragstart="ladderDragStart(event,' + kq + ')" ondragend="ladderDragEnd(event)"' +
+            ' ondragover="ladderDragOver(event,' + kq + ')" ondragleave="ladderDragLeave(event)" ondrop="ladderDrop(event,' + kq + ')">' +
+          '<td class="oh-drag-handle" title="Drag to reorder" onclick="event.stopPropagation()">&#9776;</td>' +
           '<td><div class="oh-ladder-step">' + ohEsc(l.step) + '</div>' + (grade && t.id === 'engineering' ? '<div class="oh-ladder-grade">' + grade + '</div>' : '') + '</td>' +
           '<td><div class="oh-ladder-title">' + ohEsc(l.title) + '</div>' + (staffHere ? '<div class="oh-ladder-gap">' + staffHere + '</div>' : '') + '</td>' +
           '<td><div class="oh-ladder-milestone">' + ohEsc(l.milestone || '—') + '</div></td>' +
           '<td><span class="oh-salary' + (l.currentPay == null ? ' empty' : '') + '">' + (l.currentPay == null ? 'not set' : ohGbp(l.currentPay)) + '</span>' +
-            (l.stepFromBelow != null && below ? '<div class="oh-ladder-gap">+' + ohGbp(l.stepFromBelow) + ' on ' + ohEsc(below) + '</div>' : '') + '</td>' +
+            (l.stepFromBelow != null && below ? '<div class="oh-ladder-gap">' + (l.stepFromBelow >= 0 ? '+' : '−') + ohGbp(Math.abs(l.stepFromBelow)) + ' on ' + ohEsc(below) + '</div>' : '') + '</td>' +
           '<td>' + (l.lastChangeDate ? '<div class="oh-milestone-date">' + ohFmtDate(l.lastChangeDate) + '</div>' : '—') +
             (l.lastChangeAmount != null ? '<div style="font-size:11px">' + ladderGbpDelta(l.lastChangeAmount) + '</div>' : '') + '</td>' +
           '<td class="oh-expand">▼</td>' +
         '</tr>' +
-        '<tr class="row-detail" data-ladder-detail="' + key + '"><td colspan="6">' + ladderDetailBlock(t, l, idx) + '</td></tr>';
+        '<tr class="row-detail" data-ladder-detail="' + key + '"><td colspan="7">' + ladderDetailBlock(t, l, idx) + '</td></tr>';
       }).join('');
       const table = t.steps.length
         ? '<div class="oh-table-scroll"><table class="oh-table"><thead><tr>' +
-            '<th>Step</th><th>External Title</th><th>Milestone to reach it</th><th>Pay</th><th>Last Change</th><th></th>' +
+            '<th></th><th>Step</th><th>External Title</th><th>Milestone to reach it</th><th>Pay</th><th>Last Change</th><th></th>' +
           '</tr></thead><tbody>' + rows + '</tbody></table></div>'
         : '<div class="rec-empty">No steps on this track yet. Add the first one below.</div>';
       return '<div class="oh-track" data-track="' + t.id + '">' +
@@ -3137,6 +3149,63 @@ function overheadsPage({ authed }) {
       const row = document.querySelector('tr.row-detail[data-ladder-detail="' + key + '"]');
       if (!row) return;
       row.classList.toggle('open', !row.classList.contains('open'));
+    }
+
+    // -- drag & drop reorder (within a track). Up/Down buttons remain for touch screens.
+    let ohDrag = null; // { track, step } being dragged
+
+    function ladderClearDropMarks() {
+      document.querySelectorAll('tr.drop-before, tr.drop-after').forEach(r => r.classList.remove('drop-before', 'drop-after'));
+    }
+
+    function ladderDragStart(e, key) {
+      ohDrag = ohParseStepValue(key);
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', key); } catch (err) {}
+      e.currentTarget.classList.add('dragging');
+    }
+
+    function ladderDragEnd(e) {
+      e.currentTarget.classList.remove('dragging');
+      ladderClearDropMarks();
+      ohDrag = null;
+    }
+
+    function ladderDragOver(e, key) {
+      if (!ohDrag) return;
+      const { track, step } = ohParseStepValue(key);
+      if (track !== ohDrag.track || step === ohDrag.step) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const row = e.currentTarget;
+      const rect = row.getBoundingClientRect();
+      const after = (e.clientY - rect.top) > rect.height / 2;
+      ladderClearDropMarks();
+      row.classList.add(after ? 'drop-after' : 'drop-before');
+    }
+
+    function ladderDragLeave(e) {
+      e.currentTarget.classList.remove('drop-before', 'drop-after');
+    }
+
+    async function ladderDrop(e, key) {
+      if (!ohDrag) return;
+      e.preventDefault();
+      const from = ohDrag;
+      const { track, step: target } = ohParseStepValue(key);
+      const after = e.currentTarget.classList.contains('drop-after');
+      ladderClearDropMarks();
+      if (track !== from.track || target === from.step) return;
+      const t = ohTracks.find(x => x.id === track);
+      if (!t) return;
+      const order = t.steps.map(l => l.step).filter(s => s !== from.step);
+      order.splice(order.indexOf(target) + (after ? 1 : 0), 0, from.step);
+      // Optimistic reorder so the row lands immediately; the server response then re-syncs pay gaps.
+      t.steps = order.map(c => t.steps.find(l => l.step === c));
+      ohDrag = null;
+      renderLadder();
+      const data = await ladderCall('/api/overheads/ladder/tracks/' + track + '/order', 'PUT', { order });
+      if (data) ladderApply(data); else ohLoadLadder();
     }
 
     async function ladderCall(url, method, body, onError) {
