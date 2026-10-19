@@ -11,9 +11,10 @@ function dbPath() {
 }
 
 // --- Career ladder defaults ----------------------------------------------
-// Ladder agreed 2026-10-19. Steps are fixed; title, milestone and pay history
-// are editable from the Team Salary tab. Existing volume files that predate
-// the ladder get these defaults merged in on load (see loadDb).
+// Ladders are grouped into tracks (Engineering, BIM, ...). Each track has its
+// own ordered steps; each step has an editable title, milestone and dated pay
+// history. The Engineering ladder below was agreed 2026-10-19. Volume files
+// that predate tracks are migrated on load (see normaliseTracks).
 
 const LADDER_SET_DATE = '2026-10-19';
 
@@ -36,6 +37,8 @@ export const DEFAULT_LADDER_NOTES = [
   'Placement of current team: 2–3 year engineers on £42k go to D2. The 2-year engineer on £40k goes to D1. The 1-year engineer already promised £40k is honoured: either they meet the D1 milestones at the next review, or they are placed at D1 on the strength of the promise with every further step tied to milestones.',
 ].join('\n\n');
 
+export const ENGINEERING_TRACK_ID = 'engineering';
+
 function defaultLadderEntries() {
   return DEFAULT_LADDER.map(l => ({
     step: l.step,
@@ -45,19 +48,52 @@ function defaultLadderEntries() {
   }));
 }
 
-// Merge whatever is on disk with the defaults so every fixed step exists.
-function normaliseLadder(raw) {
-  const byStep = new Map((Array.isArray(raw) ? raw : []).map(l => [l.step, l]));
-  return defaultLadderEntries().map(def => {
-    const existing = byStep.get(def.step);
-    if (!existing) return def;
-    return {
-      step: def.step,
-      title: typeof existing.title === 'string' ? existing.title : def.title,
-      milestone: typeof existing.milestone === 'string' ? existing.milestone : def.milestone,
-      payHistory: Array.isArray(existing.payHistory) ? existing.payHistory : def.payHistory,
-    };
-  });
+function defaultTracks() {
+  return [
+    { id: ENGINEERING_TRACK_ID, name: 'Engineering', notes: DEFAULT_LADDER_NOTES, steps: defaultLadderEntries() },
+    { id: 'bim', name: 'BIM', notes: '', steps: [] },
+  ];
+}
+
+function cleanStepRecord(raw) {
+  if (!raw || typeof raw.step !== 'string' || !raw.step.trim()) return null;
+  return {
+    step: raw.step.trim().toUpperCase(),
+    title: typeof raw.title === 'string' ? raw.title : '',
+    milestone: typeof raw.milestone === 'string' ? raw.milestone : '',
+    payHistory: Array.isArray(raw.payHistory) ? raw.payHistory : [],
+  };
+}
+
+// Accepts the current shape ({ tracks }) or either legacy shape
+// ({ ladder: [...steps], ladderNotes } from the single-ladder release, or nothing at all).
+function normaliseTracks(parsed) {
+  if (Array.isArray(parsed.tracks)) {
+    const seen = new Set();
+    const tracks = [];
+    for (const t of parsed.tracks) {
+      if (!t || typeof t.id !== 'string' || seen.has(t.id)) continue;
+      seen.add(t.id);
+      tracks.push({
+        id: t.id,
+        name: typeof t.name === 'string' && t.name.trim() ? t.name.trim() : t.id,
+        notes: typeof t.notes === 'string' ? t.notes : '',
+        steps: (Array.isArray(t.steps) ? t.steps : []).map(cleanStepRecord).filter(Boolean),
+      });
+    }
+    return tracks;
+  }
+  if (Array.isArray(parsed.ladder)) {
+    // Single-ladder release: merge the saved steps over the defaults so every fixed step survives.
+    const byStep = new Map(parsed.ladder.map(cleanStepRecord).filter(Boolean).map(l => [l.step, l]));
+    const steps = defaultLadderEntries().map(def => byStep.get(def.step) || def);
+    for (const [code, l] of byStep) if (!steps.some(s => s.step === code)) steps.push(l);
+    return [
+      { id: ENGINEERING_TRACK_ID, name: 'Engineering', notes: typeof parsed.ladderNotes === 'string' ? parsed.ladderNotes : DEFAULT_LADDER_NOTES, steps },
+      { id: 'bim', name: 'BIM', notes: '', steps: [] },
+    ];
+  }
+  return defaultTracks();
 }
 
 // On first boot with a fresh volume, the target file won't exist yet.
@@ -84,11 +120,10 @@ function loadDb() {
     return {
       staff: Array.isArray(parsed.staff) ? parsed.staff : [],
       recurring: Array.isArray(parsed.recurring) ? parsed.recurring : [],
-      ladder: normaliseLadder(parsed.ladder),
-      ladderNotes: typeof parsed.ladderNotes === 'string' ? parsed.ladderNotes : DEFAULT_LADDER_NOTES,
+      tracks: normaliseTracks(parsed),
     };
   } catch {
-    return { staff: [], recurring: [], ladder: normaliseLadder([]), ladderNotes: DEFAULT_LADDER_NOTES };
+    return { staff: [], recurring: [], tracks: defaultTracks() };
   }
 }
 
@@ -164,9 +199,46 @@ function buildMilestones(startIso, todayIsoStr) {
 
 // --- Staff shape for API --------------------------------------------------
 
-function computeStaffView(s, todayIsoStr, ladder) {
-  const stepEntry = s.step ? (ladder || []).find(l => l.step === s.step) : null;
-  const history = [...(s.salaryHistory || [])].sort((a, b) => a.date.localeCompare(b.date));
+function computeStaffView(s, todayIsoStr, tracks) {
+  const trackById = new Map((tracks || []).map(t => [t.id, t]));
+  const resolve = (trackId, stepCode) => {
+    const t = trackId ? trackById.get(trackId) : null;
+    const l = t ? t.steps.find(x => x.step === stepCode) : null;
+    return l ? { track: t.id, trackName: t.name, step: l.step, role: l.title } : null;
+  };
+  const sorted = [...(s.salaryHistory || [])].sort((a, b) => a.date.localeCompare(b.date));
+  // The ladder step is carried on salary entries so promotions are dated.
+  // An entry without a step inherits the step in force before it (pay-only rises, legacy rows).
+  // Entries from the single-ladder release have a step but no track: they belong to Engineering.
+  let inForce = null; // { track, step }
+  const history = sorted.map(h => {
+    const entryTrack = h.step ? (h.track || ENGINEERING_TRACK_ID) : null;
+    const promoted = !!(h.step && inForce && (h.step !== inForce.step || entryTrack !== inForce.track));
+    if (h.step) inForce = { track: entryTrack, step: h.step };
+    const r = inForce ? resolve(inForce.track, inForce.step) : null;
+    return {
+      date: h.date,
+      amount: h.amount,
+      note: h.note || '',
+      track: entryTrack,
+      step: h.step || null,
+      effectiveTrack: r ? r.track : null,
+      effectiveStep: r ? r.step : null,
+      trackName: r ? r.trackName : null,
+      role: r ? r.role : null,
+      promoted,
+    };
+  });
+  // s.step is the legacy per-person field from the short-lived dropdown; honoured only if no entry carries a step.
+  const current = inForce ? resolve(inForce.track, inForce.step) : (s.step ? resolve(ENGINEERING_TRACK_ID, s.step) : null);
+  let stepSince = null;
+  if (current) {
+    // First entry of the latest unbroken run of the current step.
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].effectiveStep !== current.step || history[i].effectiveTrack !== current.track) break;
+      stepSince = history[i].date;
+    }
+  }
   const currentSalary = history.length ? history[history.length - 1].amount : null;
   const startingSalary = history.length ? history[0].amount : null;
   const growthPct = (currentSalary && startingSalary && startingSalary > 0)
@@ -177,8 +249,12 @@ function computeStaffView(s, todayIsoStr, ladder) {
   return {
     id: s.id,
     name: s.name,
-    step: stepEntry ? stepEntry.step : null,
-    role: stepEntry ? stepEntry.title : null,
+    track: current ? current.track : null,
+    trackName: current ? current.trackName : null,
+    step: current ? current.step : null,
+    role: current ? current.role : null,
+    stepSince,
+    promotions: history.filter(h => h.promoted).map(h => ({ date: h.date, track: h.track, step: h.step })),
     startDate: s.startDate || null,
     tenure,
     currentSalary,
@@ -194,7 +270,7 @@ function computeStaffView(s, todayIsoStr, ladder) {
 export function listStaff() {
   const today = todayIso();
   const db = loadDb();
-  return db.staff.map(s => computeStaffView(s, today, db.ladder));
+  return db.staff.map(s => computeStaffView(s, today, db.tracks));
 }
 
 export function updateStartDate(id, startDate) {
@@ -206,32 +282,34 @@ export function updateStartDate(id, startDate) {
   }
   s.startDate = startDate || null;
   saveDb(db);
-  return computeStaffView(s, todayIso(), db.ladder);
+  return computeStaffView(s, todayIso(), db.tracks);
 }
 
-export function updateStaffStep(id, step) {
-  const db = loadDb();
-  const s = db.staff.find(x => x.id === id);
-  if (!s) throw new Error(`Staff not found: ${id}`);
-  const clean = step ? String(step).trim().toUpperCase() : null;
-  if (clean && !db.ladder.some(l => l.step === clean)) throw new Error(`Unknown ladder step: ${clean}`);
-  s.step = clean;
-  saveDb(db);
-  return computeStaffView(s, todayIso(), db.ladder);
+// Resolve a {track, step} reference from a salary entry payload. A bare step with no
+// track is taken as Engineering (the only track that existed before tracks were added).
+function cleanStepRef(db, track, step) {
+  const code = step ? String(step).trim().toUpperCase() : null;
+  if (!code) return { track: null, step: null };
+  const trackId = track ? String(track).trim() : ENGINEERING_TRACK_ID;
+  const t = db.tracks.find(x => x.id === trackId);
+  if (!t) throw new Error(`Unknown track: ${trackId}`);
+  if (!t.steps.some(l => l.step === code)) throw new Error(`Unknown step ${code} on ${t.name}`);
+  return { track: t.id, step: code };
 }
 
-export function addSalaryEntry(id, { date, amount, note }) {
+export function addSalaryEntry(id, { date, amount, note, track, step }) {
   const db = loadDb();
   const s = db.staff.find(x => x.id === id);
   if (!s) throw new Error(`Staff not found: ${id}`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new Error('date must be YYYY-MM-DD');
   const amt = Number(amount);
   if (!Number.isFinite(amt) || amt <= 0) throw new Error('amount must be a positive number');
+  const ref = cleanStepRef(db, track, step);
   s.salaryHistory = s.salaryHistory || [];
-  s.salaryHistory.push({ date, amount: amt, note: (note || '').slice(0, 200) });
+  s.salaryHistory.push({ date, amount: amt, note: (note || '').slice(0, 200), track: ref.track, step: ref.step });
   s.salaryHistory.sort((a, b) => a.date.localeCompare(b.date));
   saveDb(db);
-  return computeStaffView(s, todayIso(), db.ladder);
+  return computeStaffView(s, todayIso(), db.tracks);
 }
 
 export function updateSalaryNote(id, index, note) {
@@ -243,10 +321,10 @@ export function updateSalaryNote(id, index, note) {
   history[index] = { ...history[index], note: (note || '').slice(0, 200) };
   s.salaryHistory = history;
   saveDb(db);
-  return computeStaffView(s, todayIso(), db.ladder);
+  return computeStaffView(s, todayIso(), db.tracks);
 }
 
-export function updateSalaryEntry(id, index, { date, amount, note }) {
+export function updateSalaryEntry(id, index, { date, amount, note, track, step }) {
   const db = loadDb();
   const s = db.staff.find(x => x.id === id);
   if (!s) throw new Error(`Staff not found: ${id}`);
@@ -255,11 +333,12 @@ export function updateSalaryEntry(id, index, { date, amount, note }) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new Error('date must be YYYY-MM-DD');
   const amt = Number(amount);
   if (!Number.isFinite(amt) || amt <= 0) throw new Error('amount must be a positive number');
-  history[index] = { date, amount: amt, note: (note || '').slice(0, 200) };
+  const ref = cleanStepRef(db, track, step);
+  history[index] = { date, amount: amt, note: (note || '').slice(0, 200), track: ref.track, step: ref.step };
   history.sort((a, b) => a.date.localeCompare(b.date));
   s.salaryHistory = history;
   saveDb(db);
-  return computeStaffView(s, todayIso(), db.ladder);
+  return computeStaffView(s, todayIso(), db.tracks);
 }
 
 export function deleteSalaryEntry(id, index) {
@@ -271,7 +350,7 @@ export function deleteSalaryEntry(id, index) {
   const removed = history[index];
   s.salaryHistory = history.filter((_, i) => i !== index);
   saveDb(db);
-  return { view: computeStaffView(s, todayIso(), db.ladder), removed };
+  return { view: computeStaffView(s, todayIso(), db.tracks), removed };
 }
 
 // --- Recurring expenses ---------------------------------------------------
@@ -333,9 +412,9 @@ export function deleteRecurring(id) {
   return true;
 }
 
-// --- Career ladder --------------------------------------------------------
+// --- Career ladder (tracks + steps) ---------------------------------------
 
-function computeLadderView(l, prevPay) {
+function computeStepView(l, prevPay) {
   const history = [...(l.payHistory || [])].sort((a, b) => a.date.localeCompare(b.date));
   const current = history.length ? history[history.length - 1] : null;
   const first = history.length ? history[0] : null;
@@ -354,44 +433,94 @@ function computeLadderView(l, prevPay) {
   };
 }
 
-function ladderViews(db) {
+function trackView(t) {
   let prevPay = null;
-  return db.ladder.map(l => {
-    const view = computeLadderView(l, prevPay);
-    prevPay = view.currentPay;
+  const steps = t.steps.map(l => {
+    const view = computeStepView(l, prevPay);
+    if (view.currentPay != null) prevPay = view.currentPay;
     return view;
   });
+  return { id: t.id, name: t.name, notes: t.notes, steps };
+}
+
+function trackViews(db) {
+  return db.tracks.map(trackView);
 }
 
 export function getLadder() {
   const db = loadDb();
-  return { steps: ladderViews(db), notes: db.ladderNotes };
+  return { tracks: trackViews(db) };
 }
 
-export function updateLadderNotes(notes) {
-  const db = loadDb();
-  db.ladderNotes = String(notes || '').slice(0, 5000);
-  saveDb(db);
-  return db.ladderNotes;
+function findTrack(db, trackId) {
+  const t = db.tracks.find(x => x.id === trackId);
+  if (!t) throw new Error(`Track not found: ${trackId}`);
+  return t;
 }
 
-function findStep(db, step) {
-  const l = db.ladder.find(x => x.step === step);
-  if (!l) throw new Error(`Ladder step not found: ${step}`);
+function findStep(track, stepCode) {
+  const code = String(stepCode || '').trim().toUpperCase();
+  const l = track.steps.find(x => x.step === code);
+  if (!l) throw new Error(`Ladder step not found: ${track.id}/${code}`);
   return l;
 }
 
-export function updateLadderStep(step, { title, milestone }) {
-  const db = loadDb();
-  const l = findStep(db, step);
-  const cleanTitle = String(title || '').trim();
-  if (!cleanTitle) throw new Error('title required');
-  if (cleanTitle.length > 100) throw new Error('title too long');
-  l.title = cleanTitle;
-  l.milestone = String(milestone || '').trim().slice(0, 500);
-  saveDb(db);
-  return { steps: ladderViews(db) };
+function slugify(name) {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 }
+
+function staffReferencing(db, trackId, stepCode) {
+  const names = new Set();
+  for (const s of db.staff) {
+    for (const h of (s.salaryHistory || [])) {
+      const t = h.track || (h.step ? ENGINEERING_TRACK_ID : null);
+      if (t === trackId && (stepCode == null || h.step === stepCode)) names.add(s.name);
+    }
+    if (stepCode == null && s.step && trackId === ENGINEERING_TRACK_ID) names.add(s.name);
+  }
+  return [...names];
+}
+
+// -- tracks
+
+export function addTrack({ name }) {
+  const cleanName = String(name || '').trim();
+  if (!cleanName) throw new Error('name required');
+  if (cleanName.length > 60) throw new Error('name too long');
+  const db = loadDb();
+  let id = slugify(cleanName);
+  if (!id) throw new Error('name must contain letters or numbers');
+  if (db.tracks.some(t => t.id === id)) throw new Error(`A track called "${cleanName}" already exists`);
+  db.tracks.push({ id, name: cleanName, notes: '', steps: [] });
+  saveDb(db);
+  return { tracks: trackViews(db) };
+}
+
+export function updateTrack(trackId, { name, notes }) {
+  const db = loadDb();
+  const t = findTrack(db, trackId);
+  if (name !== undefined) {
+    const cleanName = String(name || '').trim();
+    if (!cleanName) throw new Error('name required');
+    if (cleanName.length > 60) throw new Error('name too long');
+    t.name = cleanName;
+  }
+  if (notes !== undefined) t.notes = String(notes || '').slice(0, 5000);
+  saveDb(db);
+  return { tracks: trackViews(db) };
+}
+
+export function deleteTrack(trackId) {
+  const db = loadDb();
+  findTrack(db, trackId);
+  const refs = staffReferencing(db, trackId, null);
+  if (refs.length) throw new Error(`Cannot delete: salary entries for ${refs.join(', ')} reference this track`);
+  db.tracks = db.tracks.filter(t => t.id !== trackId);
+  saveDb(db);
+  return { tracks: trackViews(db) };
+}
+
+// -- steps
 
 function validatePayInput({ date, amount, note }) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new Error('date must be YYYY-MM-DD');
@@ -400,37 +529,91 @@ function validatePayInput({ date, amount, note }) {
   return { date, amount: amt, note: (note || '').slice(0, 200) };
 }
 
-export function addLadderPayEntry(step, input) {
+export function addStep(trackId, { step, title, milestone, date, amount, note }) {
   const db = loadDb();
-  const l = findStep(db, step);
-  const entry = validatePayInput(input);
-  l.payHistory = l.payHistory || [];
-  l.payHistory.push(entry);
-  l.payHistory.sort((a, b) => a.date.localeCompare(b.date));
+  const t = findTrack(db, trackId);
+  const code = String(step || '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{1,6}$/.test(code)) throw new Error('step code must be 1–6 letters or digits (e.g. B1)');
+  if (t.steps.some(x => x.step === code)) throw new Error(`Step ${code} already exists on ${t.name}`);
+  const cleanTitle = String(title || '').trim();
+  if (!cleanTitle) throw new Error('title required');
+  if (cleanTitle.length > 100) throw new Error('title too long');
+  const payHistory = [];
+  if (amount != null && amount !== '') {
+    payHistory.push(validatePayInput({ date: date || todayIso(), amount, note: note || 'Step created' }));
+  }
+  t.steps.push({ step: code, title: cleanTitle, milestone: String(milestone || '').trim().slice(0, 500), payHistory });
   saveDb(db);
-  return { steps: ladderViews(db) };
+  return { tracks: trackViews(db) };
 }
 
-export function updateLadderPayEntry(step, index, input) {
+export function updateStep(trackId, stepCode, { title, milestone }) {
   const db = loadDb();
-  const l = findStep(db, step);
+  const l = findStep(findTrack(db, trackId), stepCode);
+  const cleanTitle = String(title || '').trim();
+  if (!cleanTitle) throw new Error('title required');
+  if (cleanTitle.length > 100) throw new Error('title too long');
+  l.title = cleanTitle;
+  l.milestone = String(milestone || '').trim().slice(0, 500);
+  saveDb(db);
+  return { tracks: trackViews(db) };
+}
+
+export function moveStep(trackId, stepCode, direction) {
+  const db = loadDb();
+  const t = findTrack(db, trackId);
+  const l = findStep(t, stepCode);
+  const i = t.steps.indexOf(l);
+  const j = direction === 'up' ? i - 1 : i + 1;
+  if (j < 0 || j >= t.steps.length) return { tracks: trackViews(db) };
+  [t.steps[i], t.steps[j]] = [t.steps[j], t.steps[i]];
+  saveDb(db);
+  return { tracks: trackViews(db) };
+}
+
+export function deleteStep(trackId, stepCode) {
+  const db = loadDb();
+  const t = findTrack(db, trackId);
+  const l = findStep(t, stepCode);
+  const refs = staffReferencing(db, trackId, l.step);
+  if (refs.length) throw new Error(`Cannot delete: salary entries for ${refs.join(', ')} are on ${l.step}`);
+  t.steps = t.steps.filter(x => x !== l);
+  saveDb(db);
+  return { tracks: trackViews(db) };
+}
+
+// -- step pay history
+
+export function addStepPay(trackId, stepCode, input) {
+  const db = loadDb();
+  const l = findStep(findTrack(db, trackId), stepCode);
+  l.payHistory = l.payHistory || [];
+  l.payHistory.push(validatePayInput(input));
+  l.payHistory.sort((a, b) => a.date.localeCompare(b.date));
+  saveDb(db);
+  return { tracks: trackViews(db) };
+}
+
+export function updateStepPay(trackId, stepCode, index, input) {
+  const db = loadDb();
+  const l = findStep(findTrack(db, trackId), stepCode);
   const history = [...(l.payHistory || [])].sort((a, b) => a.date.localeCompare(b.date));
   if (index < 0 || index >= history.length) throw new Error('index out of range');
   history[index] = validatePayInput(input);
   history.sort((a, b) => a.date.localeCompare(b.date));
   l.payHistory = history;
   saveDb(db);
-  return { steps: ladderViews(db) };
+  return { tracks: trackViews(db) };
 }
 
-export function deleteLadderPayEntry(step, index) {
+export function deleteStepPay(trackId, stepCode, index) {
   const db = loadDb();
-  const l = findStep(db, step);
+  const l = findStep(findTrack(db, trackId), stepCode);
   const history = [...(l.payHistory || [])].sort((a, b) => a.date.localeCompare(b.date));
   if (index < 0 || index >= history.length) throw new Error('index out of range');
   l.payHistory = history.filter((_, i) => i !== index);
   saveDb(db);
-  return { steps: ladderViews(db) };
+  return { tracks: trackViews(db) };
 }
 
 // --- Auth -----------------------------------------------------------------

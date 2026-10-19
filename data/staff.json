@@ -8,14 +8,22 @@
     { "id": "klea", "name": "Klea", "startDate": null, "salaryHistory": [] }
   ],
   "recurring": [],
-  "ladder": [
-    { "step": "G1", "title": "Graduate Design Engineer", "milestone": "Entry: produces designs under supervision", "payHistory": [{ "date": "2026-10-19", "amount": 36000, "note": "Ladder set" }] },
-    { "step": "G2", "title": "Graduate Design Engineer", "milestone": "Works independently on standard designs; few corrections at sign-off", "payHistory": [{ "date": "2026-10-19", "amount": 38000, "note": "Ladder set" }] },
-    { "step": "D1", "title": "Design Engineer", "milestone": "Runs own small projects end to end; designs pass sign-off with only minor comments", "payHistory": [{ "date": "2026-10-19", "amount": 40000, "note": "Ladder set" }] },
-    { "step": "D2", "title": "Design Engineer", "milestone": "Handles client queries directly; quotes simple jobs; leads medium projects", "payHistory": [{ "date": "2026-10-19", "amount": 42000, "note": "Ladder set" }] },
-    { "step": "I1", "title": "Design Engineer", "milestone": "Cat 0–1 sign-off authority; resolves site queries independently", "payHistory": [{ "date": "2026-10-19", "amount": 45000, "note": "Ladder set" }] },
-    { "step": "I2", "title": "Design Engineer", "milestone": "6+ months of clean sign-offs; supports a graduate; runs client relationships", "payHistory": [{ "date": "2026-10-19", "amount": 48000, "note": "Ladder set" }] },
-    { "step": "S1", "title": "Senior Design Engineer", "milestone": "Cat 2 checks; mentors juniors; trusted on complex or high-risk work", "payHistory": [{ "date": "2026-10-19", "amount": 52000, "note": "Ladder set" }] },
-    { "step": "S2", "title": "Senior Design Engineer", "milestone": "Reviews other checkers' work; takes over directors' remaining design responsibilities", "payHistory": [{ "date": "2026-10-19", "amount": 56000, "note": "Ladder set" }] }
+  "tracks": [
+    {
+      "id": "engineering",
+      "name": "Engineering",
+      "notes": "Eight steps across four grades: Graduate (G1–G2), Design Engineer (D1–D2), sign-off level (I1–I2) and Senior (S1–S2). Pay rises in steps of about £2k up to D2 and £3–4k above that.\n\nProgression is reviewed at the standard milestones tracked above (end of probation, 6 months, 1 year, 18 months, 2 years, then yearly). Every step from here on depends on meeting the milestone for the next step, not on time served.\n\nD2 is the top of the D grade. Good, steady producers sit there and only move up if they take on sign-off responsibility at I1.\n\nG1 sits at the top of the London graduate range (£28–36k), so new graduate offers stay competitive.\n\nPlacement of current team: 2–3 year engineers on £42k go to D2. The 2-year engineer on £40k goes to D1. The 1-year engineer already promised £40k is honoured: either they meet the D1 milestones at the next review, or they are placed at D1 on the strength of the promise with every further step tied to milestones.",
+      "steps": [
+        { "step": "G1", "title": "Graduate Design Engineer", "milestone": "Entry: produces designs under supervision", "payHistory": [{ "date": "2026-10-19", "amount": 36000, "note": "Ladder set" }] },
+        { "step": "G2", "title": "Graduate Design Engineer", "milestone": "Works independently on standard designs; few corrections at sign-off", "payHistory": [{ "date": "2026-10-19", "amount": 38000, "note": "Ladder set" }] },
+        { "step": "D1", "title": "Design Engineer", "milestone": "Runs own small projects end to end; designs pass sign-off with only minor comments", "payHistory": [{ "date": "2026-10-19", "amount": 40000, "note": "Ladder set" }] },
+        { "step": "D2", "title": "Design Engineer", "milestone": "Handles client queries directly; quotes simple jobs; leads medium projects", "payHistory": [{ "date": "2026-10-19", "amount": 42000, "note": "Ladder set" }] },
+        { "step": "I1", "title": "Design Engineer", "milestone": "Cat 0–1 sign-off authority; resolves site queries independently", "payHistory": [{ "date": "2026-10-19", "amount": 45000, "note": "Ladder set" }] },
+        { "step": "I2", "title": "Design Engineer", "milestone": "6+ months of clean sign-offs; supports a graduate; runs client relationships", "payHistory": [{ "date": "2026-10-19", "amount": 48000, "note": "Ladder set" }] },
+        { "step": "S1", "title": "Senior Design Engineer", "milestone": "Cat 2 checks; mentors juniors; trusted on complex or high-risk work", "payHistory": [{ "date": "2026-10-19", "amount": 52000, "note": "Ladder set" }] },
+        { "step": "S2", "title": "Senior Design Engineer", "milestone": "Reviews other checkers' work; takes over directors' remaining design responsibilities", "payHistory": [{ "date": "2026-10-19", "amount": 56000, "note": "Ladder set" }] }
+      ]
+    },
+    { "id": "bim", "name": "BIM", "notes": "", "steps": [] }
   ]
 }
