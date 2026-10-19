@@ -18,6 +18,7 @@ import {
 import {
   listStaff,
   updateStartDate,
+  updateStaffStep,
   addSalaryEntry,
   updateSalaryNote,
   updateSalaryEntry,
@@ -26,6 +27,12 @@ import {
   addRecurring,
   updateRecurring,
   deleteRecurring,
+  getLadder,
+  updateLadderNotes,
+  updateLadderStep,
+  addLadderPayEntry,
+  updateLadderPayEntry,
+  deleteLadderPayEntry,
   overheadsPassword,
   isAuthorized as isOverheadsAuthorized,
   authCookieValue as overheadsAuthCookie,
@@ -556,7 +563,7 @@ export function createDashboardRouter() {
   // --- API: Overheads (staff + salary) ---
   function requireOverheadsAuth(req, res, next) {
     if (isOverheadsAuthorized(req)) return next();
-    res.status(401).json({ success: false, error: 'Overheads authentication required' });
+    res.status(401).json({ success: false, error: 'Team Salary authentication required' });
   }
 
   router.post('/api/overheads/auth', (req, res) => {
@@ -585,6 +592,15 @@ export function createDashboardRouter() {
   router.put('/api/overheads/staff/:id/start-date', requireOverheadsAuth, (req, res) => {
     try {
       const view = updateStartDate(req.params.id, req.body?.startDate || null);
+      res.json({ success: true, staff: view });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  router.put('/api/overheads/staff/:id/step', requireOverheadsAuth, (req, res) => {
+    try {
+      const view = updateStaffStep(req.params.id, req.body?.step || null);
       res.json({ success: true, staff: view });
     } catch (err) {
       res.status(400).json({ success: false, error: err.message });
@@ -622,6 +638,56 @@ export function createDashboardRouter() {
     try {
       const { view } = deleteSalaryEntry(req.params.id, parseInt(req.params.index, 10));
       res.json({ success: true, staff: view });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- API: Career ladder ---
+  router.get('/api/overheads/ladder', requireOverheadsAuth, (_req, res) => {
+    try {
+      res.json({ success: true, ...getLadder() });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  router.put('/api/overheads/ladder/notes', requireOverheadsAuth, (req, res) => {
+    try {
+      const notes = updateLadderNotes(req.body?.notes || '');
+      res.json({ success: true, notes });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  router.put('/api/overheads/ladder/:step', requireOverheadsAuth, (req, res) => {
+    try {
+      res.json({ success: true, ...updateLadderStep(req.params.step, req.body || {}) });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  router.post('/api/overheads/ladder/:step/pay', requireOverheadsAuth, (req, res) => {
+    try {
+      res.json({ success: true, ...addLadderPayEntry(req.params.step, req.body || {}) });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  router.put('/api/overheads/ladder/:step/pay/:index', requireOverheadsAuth, (req, res) => {
+    try {
+      res.json({ success: true, ...updateLadderPayEntry(req.params.step, parseInt(req.params.index, 10), req.body || {}) });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  router.delete('/api/overheads/ladder/:step/pay/:index', requireOverheadsAuth, (req, res) => {
+    try {
+      res.json({ success: true, ...deleteLadderPayEntry(req.params.step, parseInt(req.params.index, 10)) });
     } catch (err) {
       res.status(400).json({ success: false, error: err.message });
     }
@@ -669,9 +735,10 @@ export function createDashboardRouter() {
   router.get('/live-quotes', (_req, res) => res.send(pageShell('Live Quotes', 'live-quotes', '', liveQuotesPage())));
   router.get('/dashboard', (_req, res) => res.send(pageShell('Dashboard', 'dashboard',
     '<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>', dashboardPage())));
-  router.get('/overheads', (req, res) => res.send(pageShell('Overheads', 'overheads',
+  router.get('/team-salary', (req, res) => res.send(pageShell('Team Salary', 'team-salary',
     '<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>',
     overheadsPage({ authed: isOverheadsAuthorized(req) }))));
+  router.get('/overheads', (_req, res) => res.redirect(301, '/team-salary'));
   router.get('/clients', (_req, res) => res.send(pageShell('Clients', 'clients', '', clientsPage())));
 
   return router;
@@ -688,7 +755,7 @@ function pageShell(title, activeNav, headExtra, bodyContent) {
     { key: 'live-quotes', label: 'Live Quotes', href: '/live-quotes' },
     { key: 'dashboard', label: 'Dashboard', href: '/dashboard' },
     { key: 'clients', label: 'Clients', href: '/clients' },
-    { key: 'overheads', label: 'Overheads', href: '/overheads' },
+    { key: 'team-salary', label: 'Team Salary', href: '/team-salary' },
   ];
   const navHtml = navItems.map(n =>
     `<a href="${n.href}" class="nav-link${n.key === activeNav ? ' nav-active' : ''}">${n.label}</a>`
@@ -798,15 +865,15 @@ function landingPage() {
             <div class="tile-desc">Financial overview with sales charts, KPIs, and pipeline tracking</div>
           </div>
         </a>
-        <a href="/overheads" style="text-decoration:none;">
+        <a href="/team-salary" style="text-decoration:none;">
           <div class="tile-card">
             <div class="tile-icon">
               <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--o)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
               </svg>
             </div>
-            <div class="tile-title">Overheads</div>
-            <div class="tile-desc">Staff tenure, milestones, and salary growth (password protected)</div>
+            <div class="tile-title">Team Salary</div>
+            <div class="tile-desc">Staff roles, tenure, milestones, salary growth and the career ladder (password protected)</div>
           </div>
         </a>
       </div>
@@ -2303,7 +2370,7 @@ function dashboardPage() {
 }
 
 // ---------------------------------------------------------------------------
-// Overheads page (staff + salary history, password-gated)
+// Team Salary page (staff + salary history + career ladder, password-gated)
 // ---------------------------------------------------------------------------
 
 function overheadsPage({ authed }) {
@@ -2376,6 +2443,29 @@ function overheadsPage({ authed }) {
     .sort-arrow { font-size: 9px; margin-left: 3px; color: var(--o); }
 
     .oh-recurring-section { margin-top: 40px; padding-top: 24px; border-top: 1.5px solid var(--sb); }
+    .oh-role { display: inline-flex; align-items: center; gap: 6px; }
+    .oh-role-step { font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 700; color: var(--o); background: var(--ol); border: 1px solid var(--o); border-radius: 3px; padding: 1px 5px; }
+    .oh-role-title { font-size: 12px; color: var(--k); }
+    .oh-role.empty { color: var(--mu); font-style: italic; font-size: 12px; }
+    .oh-form select { background: var(--w); border: 1.5px solid var(--sb); color: var(--k); padding: 6px 10px; border-radius: 3px; font-size: 13px; font-family: inherit; }
+    .oh-form select:focus { outline: none; border-color: var(--o); }
+
+    .oh-ladder-section { margin-top: 40px; padding-top: 24px; border-top: 1.5px solid var(--sb); }
+    .oh-explainer { background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 18px 20px; margin-bottom: 20px; }
+    .oh-explainer-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .oh-explainer-body { font-size: 13px; line-height: 1.6; color: var(--k); }
+    .oh-explainer-body p { margin: 0 0 10px; }
+    .oh-explainer-body p:last-child { margin-bottom: 0; }
+    .oh-explainer textarea { width: 100%; min-height: 220px; box-sizing: border-box; background: var(--w); border: 1.5px solid var(--o); color: var(--k); padding: 10px 12px; border-radius: 3px; font-size: 13px; line-height: 1.5; font-family: inherit; resize: vertical; }
+    .oh-explainer textarea:focus { outline: none; }
+    .oh-ladder-step { font-family: 'DM Mono', monospace; font-weight: 800; font-size: 14px; color: var(--o); }
+    .oh-ladder-grade { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mu); text-transform: uppercase; letter-spacing: 0.06em; }
+    .oh-ladder-title { font-weight: 700; color: var(--k); font-size: 13px; }
+    .oh-ladder-milestone { font-size: 12px; color: var(--s); line-height: 1.45; max-width: 420px; }
+    .oh-ladder-gap { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--mu); }
+    .oh-table-scroll { overflow-x: auto; }
+    .oh-ladder-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    @media (max-width: 900px) { .oh-ladder-detail-grid { grid-template-columns: 1fr; gap: 16px; } }
     .oh-section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
     .oh-section-header h2 { font-size: 16px; font-weight: 800; color: var(--o); letter-spacing: -0.01em; text-transform: uppercase; }
     .oh-add-recurring { background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; padding: 16px; margin-top: 16px; }
@@ -2424,7 +2514,7 @@ function overheadsPage({ authed }) {
   </style>
 
   <div class="oh-header">
-    <h1>Overheads</h1>
+    <h1>Team Salary</h1>
     <div class="oh-header-actions">
       <span class="oh-note" id="ohStatus"></span>
       <button class="btn-lock" onclick="ohLogout()">Lock</button>
@@ -2434,6 +2524,22 @@ function overheadsPage({ authed }) {
   <div class="oh-stats" id="ohStats"></div>
   <div id="ohError"></div>
   <div id="ohContent"><div class="loading">Loading staff...</div></div>
+
+  <div class="oh-ladder-section">
+    <div class="oh-section-header">
+      <h2>Career Ladder</h2>
+    </div>
+    <div class="oh-explainer">
+      <div class="oh-explainer-head">
+        <div class="oh-detail-title" style="margin-bottom:0;">How progression works</div>
+        <div id="ladderNotesActions"><button class="btn-edit" title="Edit" onclick="ladderEditNotes()">&#9998; Edit</button></div>
+      </div>
+      <div id="ladderNotes" class="oh-explainer-body"></div>
+      <div class="oh-form-msg" id="ladderNotesMsg"></div>
+    </div>
+    <div class="oh-stats" id="ladderStats"></div>
+    <div id="ladderContent"><div class="loading">Loading ladder...</div></div>
+  </div>
 
   <div class="oh-recurring-section">
     <div class="oh-section-header">
@@ -2462,6 +2568,7 @@ function overheadsPage({ authed }) {
     function ohSortValue(s, key) {
       switch (key) {
         case 'name': return (s.name || '').toLowerCase();
+        case 'role': { const i = ohLadder.findIndex(l => l.step === s.step); return i < 0 ? null : i; }
         case 'startDate': return s.startDate || null;
         case 'tenure': return s.startDate ? -new Date(s.startDate + 'T00:00:00Z').getTime() : null;
         case 'next': return s.milestones && s.milestones.next ? s.milestones.next.date : null;
@@ -2573,6 +2680,7 @@ function overheadsPage({ authed }) {
         const growthClass = s.growthPct == null ? 'flat' : (s.growthPct > 0 ? 'up' : 'flat');
         return '<tr class="row-main" data-id="' + s.id + '" onclick="ohToggle(\\'' + s.id + '\\')">' +
           '<td><div class="oh-name">' + ohEsc(s.name) + '</div></td>' +
+          '<td>' + ohRoleBadge(s) + '</td>' +
           '<td>' + (s.startDate
               ? '<span class="oh-startdate">' + ohFmtDate(s.startDate) + '</span>'
               : '<span class="oh-startdate empty">not set</span>') + '</td>' +
@@ -2585,12 +2693,13 @@ function overheadsPage({ authed }) {
           '<td><span class="oh-growth ' + growthClass + '">' + growth + '</span></td>' +
           '<td class="oh-expand">▼</td>' +
         '</tr>' +
-        '<tr class="row-detail" data-detail="' + s.id + '"><td colspan="8">' + detailBlock(s) + '</td></tr>';
+        '<tr class="row-detail" data-detail="' + s.id + '"><td colspan="9">' + detailBlock(s) + '</td></tr>';
       }).join('');
 
       document.getElementById('ohContent').innerHTML =
         '<table class="oh-table desktop"><thead><tr>' +
           ohSortHeader('name', 'Name') +
+          ohSortHeader('role', 'Role') +
           ohSortHeader('startDate', 'Start Date') +
           ohSortHeader('tenure', 'Tenure') +
           ohSortHeader('next', 'Next Milestone') +
@@ -2610,6 +2719,7 @@ function overheadsPage({ authed }) {
         return '<div class="oh-mcard" data-id="' + s.id + '">' +
           '<div class="oh-mcard-head"><div class="oh-name">' + ohEsc(s.name) + '</div>' +
             '<div class="oh-growth ' + (s.growthPct > 0 ? 'up' : 'flat') + '">' + growth + '</div></div>' +
+          '<div class="oh-mcard-row"><span class="k">Role</span><span class="v">' + (s.step ? ohEsc(s.step + ' · ' + (s.role || '')) : '—') + '</span></div>' +
           '<div class="oh-mcard-row"><span class="k">Start</span><span class="v">' + (s.startDate ? ohFmtDate(s.startDate) : '—') + '</span></div>' +
           '<div class="oh-mcard-row"><span class="k">Tenure</span><span class="v">' + (s.tenure || '—') + '</span></div>' +
           '<div class="oh-mcard-row"><span class="k">Current</span><span class="v">' + (s.currentSalary == null ? '—' : ohGbp(s.currentSalary)) + '</span></div>' +
@@ -2670,6 +2780,14 @@ function overheadsPage({ authed }) {
                 '<button class="btn-save" onclick="ohAddSalary(\\'' + s.id + '\\')">Add</button>' +
               '</div>' +
               '<div class="oh-form-msg" id="sal-msg-' + s.id + '"></div>' +
+            '</div>' +
+            '<div>' +
+              '<div class="oh-detail-title">Role / Ladder Step</div>' +
+              '<div class="oh-form">' +
+                '<div class="oh-form-field"><label>Step</label><select id="step-' + s.id + '">' + ohStepOptions(s.step) + '</select></div>' +
+                '<button class="btn-save" onclick="ohSaveStep(\\'' + s.id + '\\')">Save</button>' +
+              '</div>' +
+              '<div class="oh-form-msg" id="step-msg-' + s.id + '"></div>' +
             '</div>' +
             (!s.startDate ? '<div>' +
               '<div class="oh-detail-title">Start Date (required for milestones)</div>' +
@@ -2803,6 +2921,341 @@ function overheadsPage({ authed }) {
         if (wasOpenM) ohToggleMobile(id);
       } catch (err) {
         msg.textContent = err.message; msg.classList.add('error');
+      }
+    }
+
+    function ohRoleBadge(s) {
+      if (!s.step) return '<span class="oh-role empty">not set</span>';
+      return '<span class="oh-role"><span class="oh-role-step">' + ohEsc(s.step) + '</span><span class="oh-role-title">' + ohEsc(s.role || '') + '</span></span>';
+    }
+
+    function ohStepOptions(selected) {
+      return '<option value=""' + (!selected ? ' selected' : '') + '>— none —</option>' +
+        ohLadder.map(l => '<option value="' + l.step + '"' + (l.step === selected ? ' selected' : '') + '>' + l.step + ' · ' + ohEsc(l.title) + '</option>').join('');
+    }
+
+    async function ohSaveStep(id) {
+      const el = document.getElementById('step-' + id);
+      const msg = document.getElementById('step-msg-' + id);
+      msg.textContent = ''; msg.className = 'oh-form-msg';
+      try {
+        const res = await fetch('/api/overheads/staff/' + id + '/step', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ step: el.value || null }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        const idx = ohStaff.findIndex(x => x.id === id);
+        if (idx >= 0) ohStaff[idx] = data.staff;
+        const wasOpen = document.querySelector('tr.row-detail[data-detail="' + id + '"]')?.classList.contains('open');
+        const wasOpenM = document.querySelector('[data-detail-m="' + id + '"]')?.classList.contains('open');
+        ohRender();
+        renderLadderStats();
+        renderLadderTable();
+        if (wasOpen) ohToggle(id);
+        if (wasOpenM) ohToggleMobile(id);
+        const m2 = document.getElementById('step-msg-' + id);
+        if (m2) { m2.textContent = 'Saved'; m2.className = 'oh-form-msg success'; }
+      } catch (err) {
+        msg.textContent = err.message; msg.classList.add('error');
+      }
+    }
+
+    // --- Career ladder --------------------------------------------------------
+    let ohLadder = [];
+    let ohLadderNotes = '';
+
+    async function ohLoadLadder() {
+      try {
+        const res = await fetch('/api/overheads/ladder');
+        if (res.status === 401) { location.reload(); return; }
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        ohLadder = data.steps;
+        ohLadderNotes = data.notes || '';
+        renderLadderNotes();
+        renderLadderStats();
+        renderLadderTable();
+      } catch (err) {
+        document.getElementById('ladderContent').innerHTML = '<div class="error">' + ohEsc(err.message) + '</div>';
+      }
+    }
+
+    function renderLadderNotes() {
+      const paras = ohLadderNotes.split(/\\n\\s*\\n/).map(p => p.trim()).filter(Boolean);
+      document.getElementById('ladderNotes').innerHTML = paras.length
+        ? paras.map(p => '<p>' + ohEsc(p).replace(/\\n/g, '<br>') + '</p>').join('')
+        : '<p style="color:var(--mu);font-style:italic">No explainer yet. Click Edit to add one.</p>';
+      document.getElementById('ladderNotesActions').innerHTML = '<button class="btn-edit" title="Edit" onclick="ladderEditNotes()">&#9998; Edit</button>';
+    }
+
+    function ladderEditNotes() {
+      const box = document.getElementById('ladderNotes');
+      box.innerHTML = '<textarea id="ladderNotesInput"></textarea>';
+      document.getElementById('ladderNotesInput').value = ohLadderNotes;
+      document.getElementById('ladderNotesActions').innerHTML =
+        '<button class="note-btn save" title="Save" onclick="ladderSaveNotes()">&#10003; Save</button>' +
+        '<button class="note-btn cancel" title="Cancel" onclick="renderLadderNotes()">&times; Cancel</button>';
+      document.getElementById('ladderNotesInput').focus();
+    }
+
+    async function ladderSaveNotes() {
+      const msg = document.getElementById('ladderNotesMsg');
+      msg.textContent = ''; msg.className = 'oh-form-msg';
+      const notes = document.getElementById('ladderNotesInput').value;
+      try {
+        const res = await fetch('/api/overheads/ladder/notes', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notes }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        ohLadderNotes = data.notes;
+        renderLadderNotes();
+        msg.textContent = 'Saved'; msg.className = 'oh-form-msg success';
+      } catch (err) {
+        msg.textContent = err.message; msg.className = 'oh-form-msg error';
+      }
+    }
+
+    function renderLadderStats() {
+      const el = document.getElementById('ladderStats');
+      if (!el) return;
+      const pays = ohLadder.map(l => l.currentPay).filter(v => v != null);
+      if (!pays.length) { el.innerHTML = ''; return; }
+      const onLadder = ohStaff.filter(s => s.step).length;
+      el.innerHTML =
+        '<div class="oh-stat"><div class="oh-stat-value">' + ohLadder.length + '</div><div class="oh-stat-label">Steps</div></div>' +
+        '<div class="oh-stat"><div class="oh-stat-value">' + ohGbp(Math.min(...pays)) + '</div><div class="oh-stat-label">Entry (' + ohLadder[0].step + ')</div></div>' +
+        '<div class="oh-stat"><div class="oh-stat-value">' + ohGbp(Math.max(...pays)) + '</div><div class="oh-stat-label">Top (' + ohLadder[ohLadder.length - 1].step + ')</div></div>' +
+        '<div class="oh-stat"><div class="oh-stat-value">' + onLadder + '/' + ohStaff.length + '</div><div class="oh-stat-label">Staff Placed</div></div>';
+    }
+
+    function ladderGbpDelta(v) {
+      if (v == null) return '—';
+      if (v === 0) return '<span class="change flat">no change</span>';
+      return '<span class="change ' + (v > 0 ? 'up' : 'flat') + '">' + (v > 0 ? '+' : '−') + ohGbp(Math.abs(v)) + '</span>';
+    }
+
+    function ladderGradeName(g) {
+      return { G: 'Graduate', D: 'Design Eng.', I: 'Sign-off', S: 'Senior' }[g] || g;
+    }
+
+    function renderLadderTable() {
+      const el = document.getElementById('ladderContent');
+      if (!el || !ohLadder.length) return;
+      const rows = ohLadder.map((l, idx) => {
+        const staffHere = ohStaff.filter(s => s.step === l.step).map(s => ohEsc(s.name)).join(', ');
+        const below = idx > 0 ? ohLadder[idx - 1].step : null;
+        return '<tr class="row-main" data-ladder-row="' + l.step + '" onclick="ladderToggle(\\'' + l.step + '\\')">' +
+          '<td><div class="oh-ladder-step">' + l.step + '</div><div class="oh-ladder-grade">' + ohEsc(ladderGradeName(l.grade)) + '</div></td>' +
+          '<td><div class="oh-ladder-title">' + ohEsc(l.title) + '</div>' + (staffHere ? '<div class="oh-ladder-gap">' + staffHere + '</div>' : '') + '</td>' +
+          '<td><div class="oh-ladder-milestone">' + ohEsc(l.milestone || '—') + '</div></td>' +
+          '<td><span class="oh-salary' + (l.currentPay == null ? ' empty' : '') + '">' + (l.currentPay == null ? 'not set' : ohGbp(l.currentPay)) + '</span>' +
+            (l.stepFromBelow != null && below ? '<div class="oh-ladder-gap">+' + ohGbp(l.stepFromBelow) + ' on ' + below + '</div>' : '') + '</td>' +
+          '<td>' + (l.lastChangeDate ? '<div class="oh-milestone-date">' + ohFmtDate(l.lastChangeDate) + '</div>' : '—') +
+            (l.lastChangeAmount != null ? '<div style="font-size:11px">' + ladderGbpDelta(l.lastChangeAmount) + '</div>' : '') + '</td>' +
+          '<td class="oh-expand">▼</td>' +
+        '</tr>' +
+        '<tr class="row-detail" data-ladder-detail="' + l.step + '"><td colspan="6">' + ladderDetailBlock(l) + '</td></tr>';
+      }).join('');
+      el.innerHTML =
+        '<div class="oh-table-scroll"><table class="oh-table"><thead><tr>' +
+          '<th>Step</th><th>External Title</th><th>Milestone to reach it</th><th>Pay</th><th>Last Change</th><th></th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+    }
+
+    function ladderDetailBlock(l) {
+      const history = l.payHistory || [];
+      let historyRows;
+      if (history.length === 0) {
+        historyRows = '<tr><td colspan="5" style="color:var(--mu);font-style:italic;font-size:12px;">No pay entries yet.</td></tr>';
+      } else {
+        historyRows = history.map((h, i) => {
+          const prev = i > 0 ? history[i-1].amount : null;
+          const diff = prev != null ? h.amount - prev : null;
+          const pct = prev != null && prev > 0 ? Math.round(((h.amount - prev) / prev) * 1000) / 10 : null;
+          const change = (diff == null) ? '<span class="change flat">set</span>'
+            : (diff === 0) ? '<span class="change flat">no change</span>'
+            : '<span class="change ' + (diff > 0 ? 'up' : 'flat') + '">' + (diff > 0 ? '+' : '−') + ohGbp(Math.abs(diff)) + (pct != null ? ' (' + (pct > 0 ? '+' : '') + pct + '%)' : '') + '</span>';
+          return '<tr data-lpay-row="' + l.step + '-' + i + '">' +
+            '<td>' + ohFmtDate(h.date) + '</td>' +
+            '<td class="amount">' + ohGbp(h.amount) + '</td>' +
+            '<td>' + change + '</td>' +
+            '<td class="note">' + (h.note ? ohEsc(h.note) : '<span style="color:var(--mu);font-style:italic">—</span>') + '</td>' +
+            '<td style="text-align:right;white-space:nowrap">' +
+              '<button class="btn-edit" title="Edit" onclick="ladderEditPayRow(\\'' + l.step + '\\',' + i + ')">&#9998;</button>' +
+              ' <button class="btn-del" title="Delete" onclick="ladderDeletePay(\\'' + l.step + '\\',' + i + ')">&times;</button>' +
+            '</td>' +
+          '</tr>';
+        }).join('');
+      }
+      const titleAttr = ohEsc(l.title).replace(/"/g, '&quot;');
+      return '<div class="oh-ladder-detail-grid">' +
+        '<div class="oh-detail-block">' +
+          '<div class="oh-detail-title">Pay History — ' + l.step + '</div>' +
+          '<table class="oh-history-table"><thead><tr>' +
+            '<th>Date</th><th>Amount</th><th>Change</th><th>Note</th><th></th>' +
+          '</tr></thead><tbody>' + historyRows + '</tbody></table>' +
+          '<div style="margin-top:16px;">' +
+            '<div class="oh-detail-title">Add Pay Change</div>' +
+            '<div class="oh-form">' +
+              '<div class="oh-form-field"><label>Date</label><input type="date" id="lpay-date-' + l.step + '"></div>' +
+              '<div class="oh-form-field"><label>Amount (\u00a3)</label><input type="number" min="0" step="500" id="lpay-amt-' + l.step + '" placeholder="' + (l.currentPay || 40000) + '"></div>' +
+              '<div class="oh-form-field" style="flex:1;min-width:120px;"><label>Note</label><input type="text" id="lpay-note-' + l.step + '" placeholder="e.g. annual uplift"></div>' +
+              '<button class="btn-save" onclick="ladderAddPay(\\'' + l.step + '\\')">Add</button>' +
+            '</div>' +
+            '<div class="oh-form-msg" id="lpay-msg-' + l.step + '"></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="oh-detail-block">' +
+          '<div class="oh-detail-title">Role Definition — ' + l.step + '</div>' +
+          '<div class="oh-forms">' +
+            '<div class="oh-form-field"><label>External title</label><input type="text" class="edit-in" style="border-color:var(--sb)" maxlength="100" id="lrole-title-' + l.step + '" value="' + titleAttr + '"></div>' +
+            '<div class="oh-form-field"><label>Milestone / responsibilities to reach this step</label><textarea class="edit-in" style="border-color:var(--sb);min-height:90px;resize:vertical" maxlength="500" id="lrole-ms-' + l.step + '"></textarea></div>' +
+            '<div><button class="btn-save" onclick="ladderSaveRole(\\'' + l.step + '\\')">Save Role</button></div>' +
+            '<div class="oh-form-msg" id="lrole-msg-' + l.step + '"></div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    function ladderToggle(step) {
+      const row = document.querySelector('tr.row-detail[data-ladder-detail="' + step + '"]');
+      if (!row) return;
+      const opening = !row.classList.contains('open');
+      row.classList.toggle('open', opening);
+      if (opening) {
+        const l = ohLadder.find(x => x.step === step);
+        const ms = document.getElementById('lrole-ms-' + step);
+        if (ms && l) ms.value = l.milestone || '';
+      }
+    }
+
+    function ladderApply(data, step) {
+      ohLadder = data.steps;
+      const wasOpen = document.querySelector('tr.row-detail[data-ladder-detail="' + step + '"]')?.classList.contains('open');
+      renderLadderStats();
+      renderLadderTable();
+      // Role titles on the staff table come from the ladder, so refresh it too.
+      ohStaff = ohStaff.map(s => {
+        const l = s.step ? ohLadder.find(x => x.step === s.step) : null;
+        return { ...s, role: l ? l.title : null };
+      });
+      ohRender();
+      if (wasOpen) ladderToggle(step);
+    }
+
+    async function ladderSaveRole(step) {
+      const title = document.getElementById('lrole-title-' + step).value;
+      const milestone = document.getElementById('lrole-ms-' + step).value;
+      const msg = document.getElementById('lrole-msg-' + step);
+      msg.textContent = ''; msg.className = 'oh-form-msg';
+      try {
+        const res = await fetch('/api/overheads/ladder/' + step, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title, milestone }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        ladderApply(data, step);
+        const m2 = document.getElementById('lrole-msg-' + step);
+        if (m2) { m2.textContent = 'Saved'; m2.className = 'oh-form-msg success'; }
+      } catch (err) {
+        msg.textContent = err.message; msg.className = 'oh-form-msg error';
+      }
+    }
+
+    async function ladderAddPay(step) {
+      const date = document.getElementById('lpay-date-' + step).value;
+      const amount = parseFloat(document.getElementById('lpay-amt-' + step).value);
+      const note = document.getElementById('lpay-note-' + step).value;
+      const msg = document.getElementById('lpay-msg-' + step);
+      msg.textContent = ''; msg.className = 'oh-form-msg';
+      if (!date) { msg.textContent = 'Date required'; msg.classList.add('error'); return; }
+      if (!(amount > 0)) { msg.textContent = 'Amount must be > 0'; msg.classList.add('error'); return; }
+      try {
+        const res = await fetch('/api/overheads/ladder/' + step + '/pay', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date, amount, note }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        ladderApply(data, step);
+      } catch (err) {
+        msg.textContent = err.message; msg.classList.add('error');
+      }
+    }
+
+    function ladderEditPayRow(step, index) {
+      const row = document.querySelector('tr[data-lpay-row="' + step + '-' + index + '"]');
+      if (!row) return;
+      const l = ohLadder.find(x => x.step === step);
+      const h = l && l.payHistory ? l.payHistory[index] : null;
+      if (!h) return;
+      row.dataset.prev = row.innerHTML;
+      const noteAttr = ohEsc(h.note || '').replace(/"/g, '&quot;');
+      row.innerHTML =
+        '<td><input class="edit-in" type="date" value="' + h.date + '" data-field="date"></td>' +
+        '<td><input class="edit-in" type="number" min="0" step="500" value="' + h.amount + '" data-field="amount"></td>' +
+        '<td style="color:var(--mu);font-style:italic;font-size:11px">recalcs on save</td>' +
+        '<td><input class="edit-in" type="text" maxlength="200" value="' + noteAttr + '" data-field="note"></td>' +
+        '<td style="text-align:right;white-space:nowrap">' +
+          '<button class="note-btn save" title="Save" onclick="ladderSavePayRow(\\'' + step + '\\',' + index + ')">&#10003;</button>' +
+          '<button class="note-btn cancel" title="Cancel" onclick="ladderCancelPayRow(\\'' + step + '\\',' + index + ')">&times;</button>' +
+        '</td>';
+      row.querySelectorAll('input').forEach(inp => {
+        inp.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') { e.preventDefault(); ladderSavePayRow(step, index); }
+          else if (e.key === 'Escape') { e.preventDefault(); ladderCancelPayRow(step, index); }
+        });
+      });
+      const first = row.querySelector('input');
+      if (first) first.focus();
+    }
+
+    function ladderCancelPayRow(step, index) {
+      const row = document.querySelector('tr[data-lpay-row="' + step + '-' + index + '"]');
+      if (!row) return;
+      if (row.dataset.prev != null) row.innerHTML = row.dataset.prev;
+      delete row.dataset.prev;
+    }
+
+    async function ladderSavePayRow(step, index) {
+      const row = document.querySelector('tr[data-lpay-row="' + step + '-' + index + '"]');
+      if (!row) return;
+      const date = row.querySelector('[data-field="date"]').value;
+      const amount = parseFloat(row.querySelector('[data-field="amount"]').value);
+      const note = row.querySelector('[data-field="note"]').value;
+      if (!date) { alert('Date required'); return; }
+      if (!(amount > 0)) { alert('Amount must be > 0'); return; }
+      try {
+        const res = await fetch('/api/overheads/ladder/' + step + '/pay/' + index, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date, amount, note }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        ladderApply(data, step);
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    async function ladderDeletePay(step, index) {
+      if (!confirm('Delete this pay entry?')) return;
+      try {
+        const res = await fetch('/api/overheads/ladder/' + step + '/pay/' + index, { method: 'DELETE' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        ladderApply(data, step);
+      } catch (err) {
+        alert(err.message);
       }
     }
 
@@ -3114,7 +3567,7 @@ function overheadsPage({ authed }) {
       location.reload();
     }
 
-    ohLoad();
+    ohLoadLadder().finally(() => ohLoad().then(() => { renderLadderStats(); renderLadderTable(); }));
     ohLoadRecurring();
   </script>
 
@@ -3137,7 +3590,7 @@ function overheadsLoginPage() {
   </style>
 
   <div class="oh-login">
-    <h1>Overheads</h1>
+    <h1>Team Salary</h1>
     <p>This section is password-protected because it contains salary information.</p>
     <form onsubmit="ohLogin(event)">
       <label for="ohPw">Password</label>

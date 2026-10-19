@@ -22,7 +22,7 @@ node-quote-system/
 │   ├── dashboard.js          # Dashboard HTML + API routes (Express Router)
 │   ├── approve.js            # Approve workflow: Teamhood card → Zoho estimate
 │   ├── clients.js            # Client-identifier store (volume-backed JSON, CRUD + isIrelandClient)
-│   ├── overheads.js          # Overheads store (volume-backed JSON)
+│   ├── overheads.js          # Team Salary store: staff, career ladder, recurring (volume-backed JSON)
 │   ├── cards/
 │   │   └── source.js         # Picks teamhood/api.js or kanban/api.js by CARD_SOURCE; dashboard + approve import from here
 │   ├── kanban/
@@ -43,7 +43,7 @@ node-quote-system/
 ├── data/
 │   ├── quote_reference_db.json   # 637 past quotes for pricing intelligence
 │   ├── clients.json              # Seed for the client-identifier store (68 clients)
-│   └── staff.json                # Seed for the Overheads staff store
+│   └── staff.json                # Seed for the Team Salary store (staff + ladder)
 ├── scripts/
 │   ├── sync-quotes.js        # Incremental sync from Zoho (not yet converted to ESM)
 │   └── discover-ids.js       # Find Teamhood workspace/board UUIDs
@@ -180,7 +180,7 @@ ZOHO_API_BASE=https://www.zohoapis.eu/invoice/v3
 # Server
 PORT=3000
 DASH_PASSWORD=                      # dashboard basic-auth password
-DASH_PASSWORD_OVERHEADS=            # extra password for Overheads tab (salary data)
+DASH_PASSWORD_OVERHEADS=            # extra password for Team Salary tab (salary data); name kept from the old Overheads tab
 STAFF_DB_PATH=                      # optional override for data/staff.json (use a Railway volume path to persist across deploys)
 CLIENTS_DB_PATH=                    # optional override for data/clients.json (use a Railway volume path to persist across deploys)
 ```
@@ -199,9 +199,9 @@ PORT=3457 node --env-file=.env src/index.js
 - **Railway**: eoelatjy.up.railway.app
 - **Custom domain**: https://zoho.nodegroup.co.uk
 - **DNS**: CNAME on Netlify (zoho → eoelatjy.up.railway.app)
-- **Auth**: HTTP Basic Auth on dashboard (DASH_PASSWORD env var). Overheads tab requires a second password (DASH_PASSWORD_OVERHEADS, cookie-based, 12h). MCP endpoints unauthenticated.
+- **Auth**: HTTP Basic Auth on dashboard (DASH_PASSWORD env var). Team Salary tab (formerly Overheads) requires a second password (DASH_PASSWORD_OVERHEADS, cookie-based, 12h). MCP endpoints unauthenticated.
 - **Env vars on Railway**: TEAMHOOD_* (5), ZOHO_* (5), PORT, DASH_PASSWORD, DASH_PASSWORD_OVERHEADS, STAFF_DB_PATH (=/data/staff.json), CLIENTS_DB_PATH (=/data/clients.json)
-- **Railway volume**: mounted at `/data` (50 GB, oversized — see feedback memory). Backs the Overheads and Clients stores so writes survive redeploys. Anything else that needs persistence should live under `/data/`.
+- **Railway volume**: mounted at `/data` (50 GB, oversized — see feedback memory). Backs the Team Salary and Clients stores so writes survive redeploys. Anything else that needs persistence should live under `/data/`.
 
 ## Live Quotes Tab
 
@@ -221,17 +221,19 @@ Editable client-identifier list. Add / inline-edit / delete client codes without
 - BFT exclusion is still hardcoded in `EXCLUDED_CLIENT_CODES` (dashboard.js + teamhood/tools.js), not driven by the UI.
 - API: `GET/POST /api/clients/manage`, `PUT/DELETE /api/clients/manage/:code`. The pre-existing `GET /api/clients` (used by the quick-quote dropdown) still filters out BFT.
 
-## Overheads Tab
+## Team Salary Tab (formerly Overheads)
 
-Password-protected staff/salary + recurring-expense tracker for the current design team (Noam, Derek, Lorcan, Fereshteh, Mariana, Klea).
+Password-protected staff/salary + career-ladder + recurring-expense tracker for the current design team (Noam, Derek, Lorcan, Fereshteh, Mariana, Klea). Renamed from "Overheads" on 2026-10-19: the URL is `/team-salary` (`/overheads` 301-redirects), but the API prefix `/api/overheads/...`, the `overheads_auth` cookie, the `DASH_PASSWORD_OVERHEADS` env var and `src/overheads.js` keep their old names so Railway config did not need touching.
 - Data lives in `staff.json` at `STAFF_DB_PATH` (Railway: `/data/staff.json` on the mounted volume — see Deployment) with a repo-committed default at `data/staff.json` that seeds the volume on first boot.
 - Second password: `DASH_PASSWORD_OVERHEADS` env var (fallback `overheads`)
 - Auth is a signed cookie (sha256 of password), 12-hour expiry, `HttpOnly` + `SameSite=Strict`
 - Milestones computed from start date: probation (+3mo), 6mo, 1yr, 18mo, 2yr, then yearly reviews from year 3 onwards
 - Salary history stored as `[{date, amount, note}]`; each row is inline-editable (pencil ✎). Growth chart is a monotone-cubic curve.
+- Each staff member has an optional `step` (ladder step code, e.g. `D2`). The Role column resolves the title from the ladder; set via a dropdown in the person's detail panel (`PUT /api/overheads/staff/:id/step`).
 - Main staff table is click-to-sort on every column (arrow indicator; nulls sort to end).
+- **Career Ladder** section: 8 fixed steps G1, G2, D1, D2, I1, I2, S1, S2 (defaults in `DEFAULT_LADDER` in `src/overheads.js`, agreed 2026-10-19: £36k → £56k). Each step has an editable `title`, `milestone` (responsibilities needed to reach it) and `payHistory` `[{date, amount, note}]` so pay changes are tracked over time. The explainer paragraph above the table is `ladderNotes` (editable textarea, default in `DEFAULT_LADDER_NOTES`). Volume files that predate the ladder get the defaults merged in on load (`normaliseLadder`) and persisted on the next save.
 - Recurring expenses stored as `[{id, name, amount, frequency}]` where `frequency` is `"monthly"` or `"yearly"`; the frequency records which figure the user actually entered so no floating-point drift on display.
-- API: `POST /api/overheads/auth`, `GET/PUT/POST/DELETE /api/overheads/staff/...`, `GET/POST /api/overheads/recurring`, `PUT/DELETE /api/overheads/recurring/:id`
+- API: `POST /api/overheads/auth`, `GET/PUT/POST/DELETE /api/overheads/staff/...`, `GET /api/overheads/ladder`, `PUT /api/overheads/ladder/notes`, `PUT /api/overheads/ladder/:step`, `POST /api/overheads/ladder/:step/pay`, `PUT/DELETE /api/overheads/ladder/:step/pay/:index`, `GET/POST /api/overheads/recurring`, `PUT/DELETE /api/overheads/recurring/:id`
 - Dates rendered as `DD/MM/YYYY` everywhere; storage stays ISO `YYYY-MM-DD`.
 
 ## Styling
