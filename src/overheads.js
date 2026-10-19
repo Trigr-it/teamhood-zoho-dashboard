@@ -50,8 +50,8 @@ function defaultLadderEntries() {
 
 function defaultTracks() {
   return [
-    { id: ENGINEERING_TRACK_ID, name: 'Engineering', notes: DEFAULT_LADDER_NOTES, steps: defaultLadderEntries() },
-    { id: 'bim', name: 'BIM', notes: '', steps: [] },
+    { id: ENGINEERING_TRACK_ID, name: 'Engineering', notes: DEFAULT_LADDER_NOTES, branches: [], steps: defaultLadderEntries() },
+    { id: 'bim', name: 'BIM', notes: '', branches: [], steps: [] },
   ];
 }
 
@@ -61,8 +61,22 @@ function cleanStepRecord(raw) {
     step: raw.step.trim().toUpperCase(),
     title: typeof raw.title === 'string' ? raw.title : '',
     milestone: typeof raw.milestone === 'string' ? raw.milestone : '',
+    branch: typeof raw.branch === 'string' && raw.branch ? raw.branch : null,
     payHistory: Array.isArray(raw.payHistory) ? raw.payHistory : [],
   };
+}
+
+// Branches are named separators inside a track (e.g. BIM → "Coordination" / "Modelling").
+// A step with branch === null sits on the core path.
+function cleanBranches(raw) {
+  const seen = new Set();
+  const out = [];
+  for (const b of (Array.isArray(raw) ? raw : [])) {
+    if (!b || typeof b.id !== 'string' || !b.id || seen.has(b.id)) continue;
+    seen.add(b.id);
+    out.push({ id: b.id, name: typeof b.name === 'string' && b.name.trim() ? b.name.trim() : b.id });
+  }
+  return out;
 }
 
 // Accepts the current shape ({ tracks }) or either legacy shape
@@ -74,11 +88,16 @@ function normaliseTracks(parsed) {
     for (const t of parsed.tracks) {
       if (!t || typeof t.id !== 'string' || seen.has(t.id)) continue;
       seen.add(t.id);
+      const branches = cleanBranches(t.branches);
+      const branchIds = new Set(branches.map(b => b.id));
+      const steps = (Array.isArray(t.steps) ? t.steps : []).map(cleanStepRecord).filter(Boolean);
+      for (const l of steps) if (l.branch && !branchIds.has(l.branch)) l.branch = null;
       tracks.push({
         id: t.id,
         name: typeof t.name === 'string' && t.name.trim() ? t.name.trim() : t.id,
         notes: typeof t.notes === 'string' ? t.notes : '',
-        steps: (Array.isArray(t.steps) ? t.steps : []).map(cleanStepRecord).filter(Boolean),
+        branches,
+        steps,
       });
     }
     return tracks;
@@ -89,8 +108,8 @@ function normaliseTracks(parsed) {
     const steps = defaultLadderEntries().map(def => byStep.get(def.step) || def);
     for (const [code, l] of byStep) if (!steps.some(s => s.step === code)) steps.push(l);
     return [
-      { id: ENGINEERING_TRACK_ID, name: 'Engineering', notes: typeof parsed.ladderNotes === 'string' ? parsed.ladderNotes : DEFAULT_LADDER_NOTES, steps },
-      { id: 'bim', name: 'BIM', notes: '', steps: [] },
+      { id: ENGINEERING_TRACK_ID, name: 'Engineering', notes: typeof parsed.ladderNotes === 'string' ? parsed.ladderNotes : DEFAULT_LADDER_NOTES, branches: [], steps },
+      { id: 'bim', name: 'BIM', notes: '', branches: [], steps: [] },
     ];
   }
   return defaultTracks();
@@ -424,6 +443,7 @@ function computeStepView(l, prevPay) {
     grade: l.step.charAt(0),
     title: l.title,
     milestone: l.milestone,
+    branch: l.branch || null,
     currentPay: current ? current.amount : null,
     lastChangeDate: current ? current.date : null,
     lastChangeAmount: previous && current ? current.amount - previous.amount : null,
@@ -434,14 +454,35 @@ function computeStepView(l, prevPay) {
 }
 
 function trackView(t) {
-  let prevPay = null;
-  const steps = t.steps.map(l => {
-    const view = computeStepView(l, prevPay);
-    if (view.currentPay != null) prevPay = view.currentPay;
-    return view;
-  });
-  return { id: t.id, name: t.name, notes: t.notes, steps };
+  const branches = t.branches || [];
+  // Core path first so branches can chain their first step off the top of the core.
+  let corePay = null;
+  const views = new Map();
+  for (const l of t.steps) {
+    if (l.branch) continue;
+    const view = computeStepView(l, corePay);
+    if (view.currentPay != null) corePay = view.currentPay;
+    views.set(l, view);
+  }
+  const branchPay = new Map(branches.map(b => [b.id, corePay]));
+  for (const l of t.steps) {
+    if (!l.branch) continue;
+    const view = computeStepView(l, branchPay.get(l.branch) ?? null);
+    if (view.currentPay != null) branchPay.set(l.branch, view.currentPay);
+    views.set(l, view);
+  }
+  return { id: t.id, name: t.name, notes: t.notes, branches: branches.map(b => ({ id: b.id, name: b.name })), steps: t.steps.map(l => views.get(l)) };
 }
+
+function cleanBranchRef(t, branch) {
+  if (branch === undefined) return undefined;
+  if (branch === null || branch === '') return null;
+  const id = String(branch).trim();
+  if (!(t.branches || []).some(b => b.id === id)) throw new Error(`Unknown branch: ${id}`);
+  return id;
+}
+
+function sameGroup(a, b) { return (a.branch || null) === (b.branch || null); }
 
 function trackViews(db) {
   return db.tracks.map(trackView);
@@ -529,7 +570,7 @@ function validatePayInput({ date, amount, note }) {
   return { date, amount: amt, note: (note || '').slice(0, 200) };
 }
 
-export function addStep(trackId, { step, title, milestone, date, amount, note }) {
+export function addStep(trackId, { step, title, milestone, date, amount, note, branch }) {
   const db = loadDb();
   const t = findTrack(db, trackId);
   const code = String(step || '').trim().toUpperCase();
@@ -542,19 +583,23 @@ export function addStep(trackId, { step, title, milestone, date, amount, note })
   if (amount != null && amount !== '') {
     payHistory.push(validatePayInput({ date: date || todayIso(), amount, note: note || 'Step created' }));
   }
-  t.steps.push({ step: code, title: cleanTitle, milestone: String(milestone || '').trim().slice(0, 500), payHistory });
+  const branchId = cleanBranchRef(t, branch) ?? null;
+  t.steps.push({ step: code, title: cleanTitle, milestone: String(milestone || '').trim().slice(0, 500), branch: branchId, payHistory });
   saveDb(db);
   return { tracks: trackViews(db) };
 }
 
-export function updateStep(trackId, stepCode, { title, milestone }) {
+export function updateStep(trackId, stepCode, { title, milestone, branch }) {
   const db = loadDb();
-  const l = findStep(findTrack(db, trackId), stepCode);
+  const t = findTrack(db, trackId);
+  const l = findStep(t, stepCode);
   const cleanTitle = String(title || '').trim();
   if (!cleanTitle) throw new Error('title required');
   if (cleanTitle.length > 100) throw new Error('title too long');
   l.title = cleanTitle;
   l.milestone = String(milestone || '').trim().slice(0, 500);
+  const branchId = cleanBranchRef(t, branch);
+  if (branchId !== undefined) l.branch = branchId;
   saveDb(db);
   return { tracks: trackViews(db) };
 }
@@ -563,26 +608,77 @@ export function moveStep(trackId, stepCode, direction) {
   const db = loadDb();
   const t = findTrack(db, trackId);
   const l = findStep(t, stepCode);
+  // Swap with the nearest neighbour on the same path (core or the same branch).
   const i = t.steps.indexOf(l);
-  const j = direction === 'up' ? i - 1 : i + 1;
+  let j = direction === 'up' ? i - 1 : i + 1;
+  while (j >= 0 && j < t.steps.length && !sameGroup(t.steps[j], l)) j += (direction === 'up' ? -1 : 1);
   if (j < 0 || j >= t.steps.length) return { tracks: trackViews(db) };
   [t.steps[i], t.steps[j]] = [t.steps[j], t.steps[i]];
   saveDb(db);
   return { tracks: trackViews(db) };
 }
 
-// Full reorder (drag and drop): `order` must list every step code on the track exactly once.
+// Full reorder (drag and drop): `order` lists every step on the track exactly once, either as
+// a bare code ("D2", keeps its branch) or as { step, branch } (branch null = core path).
 export function reorderSteps(trackId, order) {
   const db = loadDb();
   const t = findTrack(db, trackId);
   if (!Array.isArray(order)) throw new Error('order must be an array of step codes');
-  const codes = order.map(c => String(c || '').trim().toUpperCase());
+  const items = order.map(o => (o && typeof o === 'object')
+    ? { step: String(o.step || '').trim().toUpperCase(), branch: cleanBranchRef(t, o.branch === undefined ? undefined : (o.branch || null)) }
+    : { step: String(o || '').trim().toUpperCase(), branch: undefined });
+  const codes = items.map(x => x.step);
   const current = t.steps.map(l => l.step);
   const valid = codes.length === current.length
     && new Set(codes).size === codes.length
     && codes.every(c => current.includes(c));
   if (!valid) throw new Error('order must list every step on the track exactly once');
-  t.steps = codes.map(c => t.steps.find(l => l.step === c));
+  t.steps = items.map(x => {
+    const l = t.steps.find(s => s.step === x.step);
+    if (x.branch !== undefined) l.branch = x.branch;
+    return l;
+  });
+  saveDb(db);
+  return { tracks: trackViews(db) };
+}
+
+// -- branches (named separators within a track)
+
+export function addBranch(trackId, { name }) {
+  const db = loadDb();
+  const t = findTrack(db, trackId);
+  const cleanName = String(name || '').trim();
+  if (!cleanName) throw new Error('name required');
+  if (cleanName.length > 60) throw new Error('name too long');
+  const id = slugify(cleanName);
+  if (!id) throw new Error('name must contain letters or numbers');
+  t.branches = t.branches || [];
+  if (t.branches.some(b => b.id === id)) throw new Error(`A branch called "${cleanName}" already exists on ${t.name}`);
+  t.branches.push({ id, name: cleanName });
+  saveDb(db);
+  return { tracks: trackViews(db) };
+}
+
+export function updateBranch(trackId, branchId, { name }) {
+  const db = loadDb();
+  const t = findTrack(db, trackId);
+  const b = (t.branches || []).find(x => x.id === branchId);
+  if (!b) throw new Error(`Branch not found: ${branchId}`);
+  const cleanName = String(name || '').trim();
+  if (!cleanName) throw new Error('name required');
+  if (cleanName.length > 60) throw new Error('name too long');
+  b.name = cleanName;
+  saveDb(db);
+  return { tracks: trackViews(db) };
+}
+
+// Deleting a branch keeps its steps: they drop back onto the core path.
+export function deleteBranch(trackId, branchId) {
+  const db = loadDb();
+  const t = findTrack(db, trackId);
+  if (!(t.branches || []).some(x => x.id === branchId)) throw new Error(`Branch not found: ${branchId}`);
+  t.branches = t.branches.filter(x => x.id !== branchId);
+  for (const l of t.steps) if (l.branch === branchId) l.branch = null;
   saveDb(db);
   return { tracks: trackViews(db) };
 }

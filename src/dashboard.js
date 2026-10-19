@@ -34,6 +34,9 @@ import {
   updateStep,
   moveStep,
   reorderSteps,
+  addBranch,
+  updateBranch,
+  deleteBranch,
   deleteStep,
   addStepPay,
   updateStepPay,
@@ -655,6 +658,9 @@ export function createDashboardRouter() {
   router.put('/api/overheads/ladder/tracks/:track/steps/:step', requireOverheadsAuth, ladderRoute(req => updateStep(req.params.track, req.params.step, req.body || {})));
   router.put('/api/overheads/ladder/tracks/:track/steps/:step/move', requireOverheadsAuth, ladderRoute(req => moveStep(req.params.track, req.params.step, req.body?.direction)));
   router.put('/api/overheads/ladder/tracks/:track/order', requireOverheadsAuth, ladderRoute(req => reorderSteps(req.params.track, req.body?.order)));
+  router.post('/api/overheads/ladder/tracks/:track/branches', requireOverheadsAuth, ladderRoute(req => addBranch(req.params.track, req.body || {})));
+  router.put('/api/overheads/ladder/tracks/:track/branches/:branch', requireOverheadsAuth, ladderRoute(req => updateBranch(req.params.track, req.params.branch, req.body || {})));
+  router.delete('/api/overheads/ladder/tracks/:track/branches/:branch', requireOverheadsAuth, ladderRoute(req => deleteBranch(req.params.track, req.params.branch)));
   router.delete('/api/overheads/ladder/tracks/:track/steps/:step', requireOverheadsAuth, ladderRoute(req => deleteStep(req.params.track, req.params.step)));
   router.post('/api/overheads/ladder/tracks/:track/steps/:step/pay', requireOverheadsAuth, ladderRoute(req => addStepPay(req.params.track, req.params.step, req.body || {})));
   router.put('/api/overheads/ladder/tracks/:track/steps/:step/pay/:index', requireOverheadsAuth, ladderRoute(req => updateStepPay(req.params.track, req.params.step, parseInt(req.params.index, 10), req.body || {})));
@@ -2432,6 +2438,14 @@ function overheadsPage({ authed }) {
     tr.row-main.dragging { opacity: 0.35; }
     tr.row-main.drop-before td { box-shadow: inset 0 2px 0 var(--o); }
     tr.row-main.drop-after td { box-shadow: inset 0 -2px 0 var(--o); }
+    tr.row-branch td { background: var(--bg2); padding: 8px 14px; border-top: 2px solid var(--sb); border-bottom: 1px solid var(--sb); }
+    tr.row-branch.core td { border-top: none; }
+    .oh-branch-row { display: flex; align-items: center; gap: 8px; }
+    .oh-branch-kind { font-family: 'DM Mono', monospace; font-size: 9px; color: var(--mu); text-transform: uppercase; letter-spacing: 0.08em; }
+    .oh-branch-name { font-weight: 800; color: var(--k); font-size: 12px; }
+    .oh-branch-row .btn-edit, .oh-branch-row .btn-del { font-size: 11px; padding: 0 4px; }
+    .oh-branch-row .spacer { flex: 1; }
+    tr.row-branch.drop-into td { box-shadow: inset 0 0 0 2px var(--o); }
     .oh-ladder-grade { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--mu); text-transform: uppercase; letter-spacing: 0.06em; }
     .oh-ladder-title { font-weight: 700; color: var(--k); font-size: 13px; }
     .oh-ladder-milestone { font-size: 12px; color: var(--s); line-height: 1.45; max-width: 420px; }
@@ -3015,8 +3029,9 @@ function overheadsPage({ authed }) {
       const stats = t.steps.length
         ? '<div class="oh-stats">' +
           '<div class="oh-stat"><div class="oh-stat-value">' + t.steps.length + '</div><div class="oh-stat-label">Steps</div></div>' +
-          (pays.length ? '<div class="oh-stat"><div class="oh-stat-value">' + ohGbp(Math.min(...pays)) + '</div><div class="oh-stat-label">Entry (' + t.steps[0].step + ')</div></div>' +
-            '<div class="oh-stat"><div class="oh-stat-value">' + ohGbp(Math.max(...pays)) + '</div><div class="oh-stat-label">Top (' + t.steps[t.steps.length - 1].step + ')</div></div>' : '') +
+          (pays.length ? '<div class="oh-stat"><div class="oh-stat-value">' + ohGbp(Math.min(...pays)) + '</div><div class="oh-stat-label">Entry (' + t.steps.find(l => l.currentPay === Math.min(...pays)).step + ')</div></div>' +
+            '<div class="oh-stat"><div class="oh-stat-value">' + ohGbp(Math.max(...pays)) + '</div><div class="oh-stat-label">Top (' + t.steps.find(l => l.currentPay === Math.max(...pays)).step + ')</div></div>' : '') +
+          ((t.branches || []).length ? '<div class="oh-stat"><div class="oh-stat-value">' + t.branches.length + '</div><div class="oh-stat-label">Branches</div></div>' : '') +
           '<div class="oh-stat"><div class="oh-stat-value">' + placed + '/' + ohStaff.length + '</div><div class="oh-stat-label">Staff Placed</div></div>' +
           '</div>'
         : '';
@@ -3024,9 +3039,10 @@ function overheadsPage({ authed }) {
       const notesHtml = paras.length
         ? paras.map(p => '<p>' + ohEsc(p).replace(/\\n/g, '<br>') + '</p>').join('')
         : '<p style="color:var(--mu);font-style:italic">No explainer yet for ' + ohEsc(t.name) + '. Click Edit to add how progression works on this track.</p>';
-      const rows = t.steps.map((l, idx) => {
+      const groups = ladderGroups(t);
+      const stepRow = (l, group, gi) => {
         const staffHere = ohStaff.filter(s => s.track === t.id && s.step === l.step).map(s => ohEsc(s.name)).join(', ');
-        const below = idx > 0 ? t.steps[idx - 1].step : null;
+        const below = gi > 0 ? group.steps[gi - 1].step : (l.branch ? ladderCoreTop(t) : null);
         const key = t.id + '|' + l.step;
         const grade = ladderGradeName(l.grade);
         const kq = '\\'' + key + '\\'';
@@ -3043,13 +3059,31 @@ function overheadsPage({ authed }) {
             (l.lastChangeAmount != null ? '<div style="font-size:11px">' + ladderGbpDelta(l.lastChangeAmount) + '</div>' : '') + '</td>' +
           '<td class="oh-expand">▼</td>' +
         '</tr>' +
-        '<tr class="row-detail" data-ladder-detail="' + key + '"><td colspan="7">' + ladderDetailBlock(t, l, idx) + '</td></tr>';
+        '<tr class="row-detail" data-ladder-detail="' + key + '"><td colspan="7">' + ladderDetailBlock(t, l, gi === 0, gi === group.steps.length - 1) + '</td></tr>';
+      };
+      const hasBranches = (t.branches || []).length > 0;
+      const rows = groups.map(group => {
+        const bkey = t.id + '|' + (group.id || '');
+        const bq = '\\'' + bkey + '\\'';
+        const sep = !hasBranches ? '' :
+          '<tr class="row-branch' + (group.id ? '' : ' core') + '" ondragover="ladderBranchDragOver(event,' + bq + ')" ondragleave="ladderDragLeave(event)" ondrop="ladderBranchDrop(event,' + bq + ')">' +
+            '<td colspan="7"><div class="oh-branch-row">' +
+              '<span class="oh-branch-kind">' + (group.id ? '&#8916; Branch' : '&#9654; Core path') + '</span>' +
+              '<span class="oh-branch-name">' + ohEsc(group.name) + '</span>' +
+              (group.steps.length ? '' : '<span class="oh-ladder-gap">empty — drag a step here or add one below</span>') +
+              '<span class="spacer"></span>' +
+              (group.id ? '<button class="btn-edit" title="Rename branch" onclick="ladderRenameBranch(' + bq + ')">&#9998;</button>' +
+                          '<button class="btn-del" title="Delete branch (steps return to the core path)" onclick="ladderDeleteBranch(' + bq + ')">&times;</button>' : '') +
+            '</div></td></tr>';
+        return sep + group.steps.map((l, gi) => stepRow(l, group, gi)).join('');
       }).join('');
       const table = t.steps.length
         ? '<div class="oh-table-scroll"><table class="oh-table"><thead><tr>' +
             '<th></th><th>Step</th><th>External Title</th><th>Milestone to reach it</th><th>Pay</th><th>Last Change</th><th></th>' +
           '</tr></thead><tbody>' + rows + '</tbody></table></div>'
         : '<div class="rec-empty">No steps on this track yet. Add the first one below.</div>';
+      const branchOpts = (sel) => '<option value=""' + (!sel ? ' selected' : '') + '>Core path</option>' +
+        (t.branches || []).map(b => '<option value="' + ohEsc(b.id) + '"' + (b.id === sel ? ' selected' : '') + '>' + ohEsc(b.name) + '</option>').join('');
       return '<div class="oh-track" data-track="' + t.id + '">' +
         '<div class="oh-track-head">' +
           '<h3 class="oh-track-name" id="ltrack-name-' + t.id + '">' + ohEsc(t.name) + ' ladder</h3>' +
@@ -3076,14 +3110,41 @@ function overheadsPage({ authed }) {
             '<div class="oh-form-field" style="flex:1;min-width:200px;"><label>Milestone to reach it</label><input type="text" maxlength="500" id="lnew-ms-' + t.id + '" placeholder="What they must be doing to hold this step"></div>' +
             '<div class="oh-form-field"><label>Pay (\u00a3)</label><input type="number" min="0" step="500" id="lnew-pay-' + t.id + '" placeholder="30000"></div>' +
             '<div class="oh-form-field"><label>From</label><input type="date" id="lnew-date-' + t.id + '"></div>' +
+            '<div class="oh-form-field"><label>Branch</label><select id="lnew-branch-' + t.id + '">' + branchOpts(null) + '</select></div>' +
             '<button class="btn-save" onclick="ladderAddStep(\\'' + t.id + '\\')">Add Step</button>' +
           '</div>' +
           '<div class="oh-form-msg" id="lnew-msg-' + t.id + '"></div>' +
         '</div>' +
+        '<div class="oh-add-recurring">' +
+          '<div class="oh-detail-title">Add Branch to ' + ohEsc(t.name) + '</div>' +
+          '<div class="oh-note" style="margin-bottom:10px;">A branch is a named separator for roles a member can move into after the core steps (e.g. Coordination, Modelling). Drag steps between the core path and branches, or pick the branch when adding a step.</div>' +
+          '<div class="oh-form">' +
+            '<div class="oh-form-field" style="min-width:200px;"><label>Branch name</label><input type="text" maxlength="60" id="lnew-bname-' + t.id + '" placeholder="e.g. Coordination" onkeydown="if(event.key===\\'Enter\\'){event.preventDefault();ladderAddBranch(\\'' + t.id + '\\');}"></div>' +
+            '<button class="btn-save" onclick="ladderAddBranch(\\'' + t.id + '\\')">Add Branch</button>' +
+          '</div>' +
+          '<div class="oh-form-msg" id="lnew-bmsg-' + t.id + '"></div>' +
+        '</div>' +
       '</div>';
     }
 
-    function ladderDetailBlock(t, l, idx) {
+    // Steps grouped for display: core path first, then each branch in order.
+    function ladderGroups(t) {
+      const groups = [{ id: null, name: 'Core path', steps: t.steps.filter(l => !l.branch) }];
+      for (const b of (t.branches || [])) groups.push({ id: b.id, name: b.name, steps: t.steps.filter(l => l.branch === b.id) });
+      return groups;
+    }
+
+    function ladderCoreTop(t) {
+      const core = t.steps.filter(l => !l.branch && l.currentPay != null);
+      return core.length ? core[core.length - 1].step : null;
+    }
+
+    function ohParseBranchKey(v) {
+      const i = v.indexOf('|');
+      return { track: v.slice(0, i), branch: v.slice(i + 1) || null };
+    }
+
+    function ladderDetailBlock(t, l, isFirst, isLast) {
       const history = l.payHistory || [];
       const key = t.id + '|' + l.step;
       let historyRows;
@@ -3133,10 +3194,14 @@ function overheadsPage({ authed }) {
           '<div class="oh-forms">' +
             '<div class="oh-form-field"><label>External title</label><input type="text" class="edit-in" style="border-color:var(--sb)" maxlength="100" id="lrole-title-' + key + '" value="' + titleAttr + '"></div>' +
             '<div class="oh-form-field"><label>Milestone / responsibilities to reach this step</label><textarea class="edit-in" style="border-color:var(--sb);min-height:90px;resize:vertical" maxlength="500" id="lrole-ms-' + key + '">' + msAttr + '</textarea></div>' +
+            ((t.branches || []).length ? '<div class="oh-form-field"><label>Branch</label><select class="edit-in" style="border-color:var(--sb)" id="lrole-branch-' + key + '">' +
+              '<option value=""' + (!l.branch ? ' selected' : '') + '>Core path</option>' +
+              t.branches.map(b => '<option value="' + ohEsc(b.id) + '"' + (b.id === l.branch ? ' selected' : '') + '>' + ohEsc(b.name) + '</option>').join('') +
+              '</select></div>' : '') +
             '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
               '<button class="btn-save" onclick="ladderSaveRole(\\'' + key + '\\')">Save Role</button>' +
-              '<button class="btn-lock" title="Move up" onclick="ladderMoveStep(\\'' + key + '\\',\\'up\\')"' + (idx === 0 ? ' disabled' : '') + '>&#9650; Up</button>' +
-              '<button class="btn-lock" title="Move down" onclick="ladderMoveStep(\\'' + key + '\\',\\'down\\')"' + (idx === t.steps.length - 1 ? ' disabled' : '') + '>&#9660; Down</button>' +
+              '<button class="btn-lock" title="Move up" onclick="ladderMoveStep(\\'' + key + '\\',\\'up\\')"' + (isFirst ? ' disabled' : '') + '>&#9650; Up</button>' +
+              '<button class="btn-lock" title="Move down" onclick="ladderMoveStep(\\'' + key + '\\',\\'down\\')"' + (isLast ? ' disabled' : '') + '>&#9660; Down</button>' +
               '<button class="btn-del" title="Delete step" onclick="ladderDeleteStep(\\'' + key + '\\')">&times; Delete step</button>' +
             '</div>' +
             '<div class="oh-form-msg" id="lrole-msg-' + key + '"></div>' +
@@ -3155,7 +3220,7 @@ function overheadsPage({ authed }) {
     let ohDrag = null; // { track, step } being dragged
 
     function ladderClearDropMarks() {
-      document.querySelectorAll('tr.drop-before, tr.drop-after').forEach(r => r.classList.remove('drop-before', 'drop-after'));
+      document.querySelectorAll('tr.drop-before, tr.drop-after, tr.drop-into').forEach(r => r.classList.remove('drop-before', 'drop-after', 'drop-into'));
     }
 
     function ladderDragStart(e, key) {
@@ -3185,7 +3250,7 @@ function overheadsPage({ authed }) {
     }
 
     function ladderDragLeave(e) {
-      e.currentTarget.classList.remove('drop-before', 'drop-after');
+      e.currentTarget.classList.remove('drop-before', 'drop-after', 'drop-into');
     }
 
     async function ladderDrop(e, key) {
@@ -3198,13 +3263,55 @@ function overheadsPage({ authed }) {
       if (track !== from.track || target === from.step) return;
       const t = ohTracks.find(x => x.id === track);
       if (!t) return;
-      const order = t.steps.map(l => l.step).filter(s => s !== from.step);
-      order.splice(order.indexOf(target) + (after ? 1 : 0), 0, from.step);
-      // Optimistic reorder so the row lands immediately; the server response then re-syncs pay gaps.
-      t.steps = order.map(c => t.steps.find(l => l.step === c));
+      const targetStep = t.steps.find(l => l.step === target);
+      // Work in display order (core, then each branch) so the drop lands where the eye expects.
+      const display = ladderGroups(t).flatMap(g => g.steps);
+      const order = display.filter(l => l.step !== from.step).map(l => ({ step: l.step, branch: l.branch || null }));
+      order.splice(order.findIndex(o => o.step === target) + (after ? 1 : 0), 0, { step: from.step, branch: targetStep.branch || null });
       ohDrag = null;
+      ladderCommitOrder(t, order);
+    }
+
+    function ladderBranchDragOver(e, bkey) {
+      if (!ohDrag) return;
+      const { track } = ohParseBranchKey(bkey);
+      if (track !== ohDrag.track) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      ladderClearDropMarks();
+      e.currentTarget.classList.add('drop-into');
+    }
+
+    // Dropping on a separator puts the step first on that path.
+    async function ladderBranchDrop(e, bkey) {
+      if (!ohDrag) return;
+      e.preventDefault();
+      const from = ohDrag;
+      const { track, branch } = ohParseBranchKey(bkey);
+      ladderClearDropMarks();
+      if (track !== from.track) return;
+      const t = ohTracks.find(x => x.id === track);
+      if (!t) return;
+      const display = ladderGroups(t).flatMap(g => g.steps);
+      const order = display.filter(l => l.step !== from.step).map(l => ({ step: l.step, branch: l.branch || null }));
+      let at = order.findIndex(o => o.branch === branch);
+      if (at < 0) {
+        // Empty group: insert after the last step of the preceding groups.
+        const groupIds = ladderGroups(t).map(g => g.id);
+        const gi = groupIds.indexOf(branch);
+        at = order.length;
+        for (let i = 0; i < order.length; i++) if (groupIds.indexOf(order[i].branch) > gi) { at = i; break; }
+      }
+      order.splice(at, 0, { step: from.step, branch });
+      ohDrag = null;
+      ladderCommitOrder(t, order);
+    }
+
+    async function ladderCommitOrder(t, order) {
+      // Optimistic reorder so the row lands immediately; the server response then re-syncs pay gaps.
+      t.steps = order.map(o => ({ ...t.steps.find(l => l.step === o.step), branch: o.branch }));
       renderLadder();
-      const data = await ladderCall('/api/overheads/ladder/tracks/' + track + '/order', 'PUT', { order });
+      const data = await ladderCall('/api/overheads/ladder/tracks/' + t.id + '/order', 'PUT', { order });
       if (data) ladderApply(data); else ohLoadLadder();
     }
 
@@ -3296,6 +3403,7 @@ function overheadsPage({ authed }) {
         milestone: g('lnew-ms').value.trim(),
         amount: g('lnew-pay').value ? parseFloat(g('lnew-pay').value) : null,
         date: g('lnew-date').value || null,
+        branch: (g('lnew-branch') && g('lnew-branch').value) || null,
       };
       if (!payload.step) { ladderMsg('lnew-msg-' + trackId, 'Step code required', false); return; }
       if (!payload.title) { ladderMsg('lnew-msg-' + trackId, 'Title required', false); return; }
@@ -3307,10 +3415,43 @@ function overheadsPage({ authed }) {
       const { track, step } = ohParseStepValue(key);
       const title = document.getElementById('lrole-title-' + key).value;
       const milestone = document.getElementById('lrole-ms-' + key).value;
-      const data = await ladderCall('/api/overheads/ladder/tracks/' + track + '/steps/' + step, 'PUT', { title, milestone }, err => ladderMsg('lrole-msg-' + key, err.message, false));
+      const branchEl = document.getElementById('lrole-branch-' + key);
+      const body = { title, milestone };
+      if (branchEl) body.branch = branchEl.value || null;
+      const data = await ladderCall('/api/overheads/ladder/tracks/' + track + '/steps/' + step, 'PUT', body, err => ladderMsg('lrole-msg-' + key, err.message, false));
       if (!data) return;
       ladderApply(data);
       ladderMsg('lrole-msg-' + key, 'Saved', true);
+    }
+
+    // -- branches
+
+    async function ladderAddBranch(trackId) {
+      const el = document.getElementById('lnew-bname-' + trackId);
+      const name = el.value.trim();
+      if (!name) { ladderMsg('lnew-bmsg-' + trackId, 'Name required', false); return; }
+      const data = await ladderCall('/api/overheads/ladder/tracks/' + trackId + '/branches', 'POST', { name }, err => ladderMsg('lnew-bmsg-' + trackId, err.message, false));
+      if (data) ladderApply(data);
+    }
+
+    async function ladderRenameBranch(bkey) {
+      const { track, branch } = ohParseBranchKey(bkey);
+      const t = ohTracks.find(x => x.id === track);
+      const b = t && (t.branches || []).find(x => x.id === branch);
+      const name = prompt('Branch name', b ? b.name : '');
+      if (name == null || !name.trim()) return;
+      const data = await ladderCall('/api/overheads/ladder/tracks/' + track + '/branches/' + branch, 'PUT', { name: name.trim() });
+      if (data) ladderApply(data);
+    }
+
+    async function ladderDeleteBranch(bkey) {
+      const { track, branch } = ohParseBranchKey(bkey);
+      const t = ohTracks.find(x => x.id === track);
+      const b = t && (t.branches || []).find(x => x.id === branch);
+      const n = t ? t.steps.filter(l => l.branch === branch).length : 0;
+      if (!confirm('Delete the ' + (b ? b.name : branch) + ' branch?' + (n ? ' Its ' + n + ' step' + (n === 1 ? '' : 's') + ' will move back to the core path.' : ''))) return;
+      const data = await ladderCall('/api/overheads/ladder/tracks/' + track + '/branches/' + branch, 'DELETE');
+      if (data) ladderApply(data);
     }
 
     async function ladderMoveStep(key, direction) {
