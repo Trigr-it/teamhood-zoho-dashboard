@@ -227,7 +227,7 @@ Password-protected staff/salary + career-ladder + recurring-expense tracker for 
 - Data lives in `staff.json` at `STAFF_DB_PATH` (Railway: `/data/staff.json` on the mounted volume — see Deployment) with a repo-committed default at `data/staff.json` that seeds the volume on first boot.
 - Second password: `DASH_PASSWORD_OVERHEADS` env var (fallback `overheads`)
 - Auth is a signed cookie (sha256 of password), 12-hour expiry, `HttpOnly` + `SameSite=Strict`
-- Milestones computed from start date: probation (+3mo), 6mo, 1yr, 18mo, 2yr, then yearly reviews from year 3 onwards
+- Milestones computed from start date: probation (+3mo), then a review every 6 months (6mo, 1yr, 18mo, 2yr, 2.5yr, 3yr, ...). The UI lists only milestones from 14 days ago up to 2 years ahead.
 - Salary history stored as `[{date, amount, note}]`; each row is inline-editable (pencil ✎). Growth chart is a monotone-cubic curve.
 - **Role lives on salary entries, not on the person.** Each `salaryHistory` row may carry `{ track, step }` (e.g. `engineering` / `D2`); the Add Salary Entry form and the inline row editor have a Role/Step select grouped by track. A row without a step inherits the step in force before it. The person's current role, `stepSince` and `promotions` are derived from the history, and promotion rows are flagged in the history table. A legacy per-person `step` field (from the 2026-10-19 dropdown build) is honoured only when no row carries a step.
 - Main staff table is click-to-sort on every column (arrow indicator; nulls sort to end).

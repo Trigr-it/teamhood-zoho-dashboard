@@ -2784,7 +2784,7 @@ function overheadsPage({ authed }) {
           (history.length >= 1
             ? '<div class="oh-chart-wrap"><canvas id="chart-' + s.id + '"></canvas></div>'
             : '<div style="color:var(--mu);font-style:italic;font-size:12px;">Add a salary entry to see the growth chart.</div>') +
-          '<div class="oh-detail-title" style="margin-top:20px;">Upcoming Milestones</div>' +
+          '<div class="oh-detail-title" style="margin-top:20px;">Milestones (next 2 years)</div>' +
           (milestones ? '<ul class="oh-milestone-list">' + milestones + '</ul>' : '<div style="color:var(--mu);font-style:italic;font-size:12px;">Set a start date to see milestones.</div>') +
         '</div>' +
       '</div>';
