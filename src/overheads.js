@@ -239,6 +239,7 @@ function computeStaffView(s, todayIsoStr, tracks) {
       date: h.date,
       amount: h.amount,
       note: h.note || '',
+      reviewNotes: h.reviewNotes || '',
       track: entryTrack,
       step: h.step || null,
       effectiveTrack: r ? r.track : null,
@@ -316,7 +317,39 @@ function cleanStepRef(db, track, step) {
   return { track: t.id, step: code };
 }
 
-export function addSalaryEntry(id, { date, amount, note, track, step }) {
+// Review notes are rich text from the dashboard's contenteditable editor. Keep a small
+// whitelist of tags, drop every attribute except a safe href, and normalise the aliases
+// browsers emit from execCommand (b/i/div/h1-h6) so the stored HTML stays uniform.
+const REVIEW_HTML_MAX = 20000;
+const REVIEW_TAG_MAP = {
+  p: 'p', div: 'p', br: 'br', strong: 'strong', b: 'strong', em: 'em', i: 'em', u: 'u',
+  s: 's', strike: 's', del: 's', ul: 'ul', ol: 'ol', li: 'li', blockquote: 'blockquote', a: 'a',
+  h1: 'h4', h2: 'h4', h3: 'h4', h4: 'h4', h5: 'h4', h6: 'h4',
+};
+export function sanitizeReviewHtml(input) {
+  let html = String(input || '').slice(0, REVIEW_HTML_MAX)
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(script|style|iframe|object|embed)\b[\s\S]*?<\/\1\s*>/gi, '');
+  let rejectedAnchors = 0; // open <a> tags dropped for an unsafe href; their closing tags are dropped too
+  html = html.replace(/<\s*(\/?)\s*([a-zA-Z][a-zA-Z0-9]*)([^>]*)>/g, (m, slash, tag, attrs) => {
+    const t = REVIEW_TAG_MAP[tag.toLowerCase()];
+    if (!t) return '';
+    if (t === 'br') return slash ? '' : '<br>';
+    if (t === 'a' && slash && rejectedAnchors > 0) { rejectedAnchors--; return ''; }
+    if (slash) return '</' + t + '>';
+    if (t === 'a') {
+      const hm = /href\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(attrs || '');
+      const href = hm ? (hm[2] ?? hm[3] ?? hm[4] ?? '').trim() : '';
+      if (!/^(https?:\/\/|mailto:)/i.test(href)) { rejectedAnchors++; return ''; }
+      return '<a href="' + href.replace(/"/g, '&quot;') + '" target="_blank" rel="noopener">';
+    }
+    return '<' + t + '>';
+  });
+  const text = html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+  return text ? html.trim() : '';
+}
+
+export function addSalaryEntry(id, { date, amount, note, track, step, reviewNotes }) {
   const db = loadDb();
   const s = db.staff.find(x => x.id === id);
   if (!s) throw new Error(`Staff not found: ${id}`);
@@ -325,7 +358,7 @@ export function addSalaryEntry(id, { date, amount, note, track, step }) {
   if (!Number.isFinite(amt) || amt <= 0) throw new Error('amount must be a positive number');
   const ref = cleanStepRef(db, track, step);
   s.salaryHistory = s.salaryHistory || [];
-  s.salaryHistory.push({ date, amount: amt, note: (note || '').slice(0, 200), track: ref.track, step: ref.step });
+  s.salaryHistory.push({ date, amount: amt, note: (note || '').slice(0, 200), track: ref.track, step: ref.step, reviewNotes: sanitizeReviewHtml(reviewNotes) });
   s.salaryHistory.sort((a, b) => a.date.localeCompare(b.date));
   saveDb(db);
   return computeStaffView(s, todayIso(), db.tracks);
@@ -343,6 +376,18 @@ export function updateSalaryNote(id, index, note) {
   return computeStaffView(s, todayIso(), db.tracks);
 }
 
+export function updateSalaryReviewNotes(id, index, html) {
+  const db = loadDb();
+  const s = db.staff.find(x => x.id === id);
+  if (!s) throw new Error(`Staff not found: ${id}`);
+  const history = [...(s.salaryHistory || [])].sort((a, b) => a.date.localeCompare(b.date));
+  if (index < 0 || index >= history.length) throw new Error('index out of range');
+  history[index] = { ...history[index], reviewNotes: sanitizeReviewHtml(html) };
+  s.salaryHistory = history;
+  saveDb(db);
+  return computeStaffView(s, todayIso(), db.tracks);
+}
+
 export function updateSalaryEntry(id, index, { date, amount, note, track, step }) {
   const db = loadDb();
   const s = db.staff.find(x => x.id === id);
@@ -353,7 +398,7 @@ export function updateSalaryEntry(id, index, { date, amount, note, track, step }
   const amt = Number(amount);
   if (!Number.isFinite(amt) || amt <= 0) throw new Error('amount must be a positive number');
   const ref = cleanStepRef(db, track, step);
-  history[index] = { date, amount: amt, note: (note || '').slice(0, 200), track: ref.track, step: ref.step };
+  history[index] = { date, amount: amt, note: (note || '').slice(0, 200), track: ref.track, step: ref.step, reviewNotes: history[index].reviewNotes || '' };
   history.sort((a, b) => a.date.localeCompare(b.date));
   s.salaryHistory = history;
   saveDb(db);

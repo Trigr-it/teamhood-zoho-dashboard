@@ -20,6 +20,7 @@ import {
   updateStartDate,
   addSalaryEntry,
   updateSalaryNote,
+  updateSalaryReviewNotes,
   updateSalaryEntry,
   deleteSalaryEntry,
   listRecurring,
@@ -618,6 +619,15 @@ export function createDashboardRouter() {
   router.patch('/api/overheads/staff/:id/salary/:index/note', requireOverheadsAuth, (req, res) => {
     try {
       const view = updateSalaryNote(req.params.id, parseInt(req.params.index, 10), req.body?.note || '');
+      res.json({ success: true, staff: view });
+    } catch (err) {
+      res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  router.put('/api/overheads/staff/:id/salary/:index/review-notes', requireOverheadsAuth, (req, res) => {
+    try {
+      const view = updateSalaryReviewNotes(req.params.id, parseInt(req.params.index, 10), req.body?.html || '');
       res.json({ success: true, staff: view });
     } catch (err) {
       res.status(400).json({ success: false, error: err.message });
@@ -2397,6 +2407,24 @@ function overheadsPage({ authed }) {
     .oh-history-table .change.up { color: #2d8a3e; font-family: 'DM Mono', monospace; font-size: 11px; }
     .oh-history-table .change.flat { color: var(--mu); font-family: 'DM Mono', monospace; font-size: 11px; }
     .oh-history-table .note { color: var(--s); font-size: 11px; }
+    .oh-review-toggle { background: transparent; border: none; cursor: pointer; font-family: 'DM Mono', monospace; font-size: 10px; color: var(--s); padding: 3px 0 0; display: inline-flex; align-items: center; gap: 4px; letter-spacing: 0.02em; }
+    .oh-review-toggle:hover { color: var(--o); }
+    .oh-review-toggle .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--o); display: inline-block; }
+    .oh-review-row td { background: #FBFAF7; padding: 12px 14px 14px; }
+    .oh-review-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 8px; }
+    .oh-rich { font-size: 13px; line-height: 1.6; color: var(--k); }
+    .oh-rich p { margin: 0 0 8px; }
+    .oh-rich p:last-child { margin-bottom: 0; }
+    .oh-rich h4 { font-size: 13px; font-weight: 700; margin: 10px 0 4px; }
+    .oh-rich ul, .oh-rich ol { margin: 0 0 8px; padding-left: 22px; }
+    .oh-rich blockquote { margin: 0 0 8px; padding: 4px 12px; border-left: 3px solid var(--o); color: var(--s); }
+    .oh-rich a { color: var(--o); }
+    .oh-rich-empty { color: var(--mu); font-style: italic; font-size: 12px; }
+    .oh-rt-toolbar { display: flex; flex-wrap: wrap; gap: 3px; margin-bottom: 6px; }
+    .oh-rt-toolbar button { background: var(--w); border: 1.5px solid var(--sb); border-radius: 3px; color: var(--k); cursor: pointer; font-family: inherit; font-size: 12px; min-width: 28px; height: 26px; padding: 0 7px; }
+    .oh-rt-toolbar button:hover { border-color: var(--o); color: var(--o); }
+    .oh-rt-editor { background: var(--w); border: 1.5px solid var(--o); border-radius: 3px; min-height: 140px; max-height: 420px; overflow-y: auto; padding: 10px 12px; outline: none; }
+    .oh-rt-actions { display: flex; gap: 10px; margin-top: 8px; align-items: center; }
     .btn-del { background: transparent; border: none; color: #cc3300; cursor: pointer; font-size: 14px; padding: 2px 6px; font-weight: 700; }
     .btn-del:hover { color: #a32800; }
     .btn-edit { background: transparent; border: none; color: var(--s); cursor: pointer; font-size: 13px; padding: 2px 6px; font-weight: 700; }
@@ -2561,6 +2589,7 @@ function overheadsPage({ authed }) {
 
   <script>
     let ohStaff = [];
+    const ohOpenReviews = new Set(); // 'staffId-index' keys of expanded review-notes panels, kept across re-renders
     let ohSortKey = 'name';
     let ohSortDir = 'asc';
     const ohCharts = new Map();
@@ -2745,17 +2774,40 @@ function overheadsPage({ authed }) {
           const change = (diff == null) ? '<span class="change flat">start</span>'
             : (diff === 0) ? '<span class="change flat">no change</span>'
             : '<span class="change up">+' + ohGbp(diff) + (pct != null ? ' (+' + pct + '%)' : '') + '</span>';
-          return '<tr data-hist-row="' + s.id + '-' + i + '">' +
+          const key = s.id + '-' + i;
+          const open = ohOpenReviews.has(key);
+          const hasNotes = !!(h.reviewNotes && h.reviewNotes.trim());
+          return '<tr data-hist-row="' + key + '">' +
             '<td>' + ohFmtDate(h.date) + '</td>' +
             '<td class="amount">' + ohGbp(h.amount) + '</td>' +
             '<td>' + change + '</td>' +
             '<td>' + ohHistoryRoleCell(h) + '</td>' +
-            '<td class="note">' + (h.note ? ohEsc(h.note) : '<span style="color:var(--mu);font-style:italic">—</span>') + '</td>' +
+            '<td class="note">' + (h.note ? ohEsc(h.note) : '<span style="color:var(--mu);font-style:italic">—</span>') +
+              '<div><button class="oh-review-toggle" title="Review discussion notes for this entry" onclick="ohToggleReview(this,\\'' + key + '\\')"><span class="tri">' + (open ? '&#9662;' : '&#9656;') + '</span> Review notes' + (hasNotes ? ' <span class="dot"></span>' : '') + '</button></div>' +
+            '</td>' +
             '<td style="text-align:right;white-space:nowrap">' +
               '<button class="btn-edit" title="Edit" onclick="ohEditHistoryRow(\\'' + s.id + '\\',' + i + ')">✎</button>' +
               ' <button class="btn-del" title="Delete" onclick="ohDeleteSalary(\\'' + s.id + '\\',' + i + ')">×</button>' +
             '</td>' +
-          '</tr>';
+          '</tr>' +
+          '<tr class="oh-review-row" data-review-row="' + key + '"' + (open ? '' : ' style="display:none"') + '><td colspan="6">' +
+            '<div class="oh-review-head">' +
+              '<div class="oh-detail-title" style="margin:0">Review notes · ' + ohFmtDate(h.date) + (h.note ? ' · ' + ohEsc(h.note) : '') + '</div>' +
+              '<div class="oh-review-actions"><button class="btn-edit" onclick="ohEditReview(this,\\'' + s.id + '\\',' + i + ')">&#9998; Edit</button></div>' +
+            '</div>' +
+            '<div class="oh-review-view">' + (hasNotes
+              ? '<div class="oh-rich">' + h.reviewNotes + '</div>'
+              : '<div class="oh-rich-empty">No review notes yet. Click Edit to record the discussion from this review.</div>') + '</div>' +
+            '<div class="oh-review-edit" style="display:none">' +
+              ohRtToolbar() +
+              '<div class="oh-rt-editor oh-rich" contenteditable="true" spellcheck="true"></div>' +
+              '<div class="oh-rt-actions">' +
+                '<button class="btn-save" onclick="ohSaveReview(this,\\'' + s.id + '\\',' + i + ')">Save notes</button>' +
+                '<button class="note-btn cancel" onclick="ohCancelReview(this)">&times; Cancel</button>' +
+                '<span class="oh-form-msg"></span>' +
+              '</div>' +
+            '</div>' +
+          '</td></tr>';
         }).join('');
       }
 
@@ -3605,6 +3657,117 @@ function overheadsPage({ authed }) {
       if (!row) return;
       if (row.dataset.prev != null) row.innerHTML = row.dataset.prev;
       delete row.dataset.prev;
+    }
+
+    // --- Review notes (rich text per salary entry) ---
+    // Browser-side mirror of the server whitelist: tidies pasted Word/Docs HTML before it hits the editor.
+    const OH_RT_TAGS = { P: 'p', DIV: 'p', BR: 'br', STRONG: 'strong', B: 'strong', EM: 'em', I: 'em', U: 'u', S: 's', STRIKE: 's', DEL: 's', UL: 'ul', OL: 'ol', LI: 'li', BLOCKQUOTE: 'blockquote', A: 'a', H1: 'h4', H2: 'h4', H3: 'h4', H4: 'h4', H5: 'h4', H6: 'h4' };
+    function ohRtClean(html) {
+      const doc = new DOMParser().parseFromString('<body>' + html + '</body>', 'text/html');
+      const walk = node => Array.from(node.childNodes).map(n => {
+        if (n.nodeType === 3) return ohEsc(n.nodeValue);
+        if (n.nodeType !== 1) return '';
+        const t = OH_RT_TAGS[n.tagName];
+        const inner = walk(n);
+        if (!t) return inner;
+        if (t === 'br') return '<br>';
+        if (t === 'a') {
+          const href = (n.getAttribute('href') || '').trim();
+          return /^(https?:|mailto:)/i.test(href) ? '<a href="' + ohEsc(href).replace(/"/g, '&quot;') + '">' + inner + '</a>' : inner;
+        }
+        return '<' + t + '>' + inner + '</' + t + '>';
+      }).join('');
+      return walk(doc.body);
+    }
+    function ohRtToolbar() {
+      const b = (cmd, arg, label, title) => '<button type="button" title="' + title + '" onmousedown="event.preventDefault()" onclick="ohRtCmd(this,\\'' + cmd + '\\',' + (arg ? '\\'' + arg + '\\'' : 'null') + ')">' + label + '</button>';
+      return '<div class="oh-rt-toolbar">' +
+        b('bold', null, '<strong>B</strong>', 'Bold (Ctrl+B)') +
+        b('italic', null, '<em>I</em>', 'Italic (Ctrl+I)') +
+        b('underline', null, '<u>U</u>', 'Underline (Ctrl+U)') +
+        b('formatBlock', 'h4', 'H', 'Heading') +
+        b('formatBlock', 'p', '&#182;', 'Normal paragraph') +
+        b('insertUnorderedList', null, '&#8226; List', 'Bullet list') +
+        b('insertOrderedList', null, '1. List', 'Numbered list') +
+        b('formatBlock', 'blockquote', '&#8220; &#8221;', 'Quote') +
+        b('createLink', null, 'Link', 'Insert link') +
+        b('removeFormat', null, 'Clear', 'Clear formatting') +
+      '</div>';
+    }
+    function ohRtCmd(btn, cmd, arg) {
+      const editor = btn.closest('.oh-review-edit').querySelector('.oh-rt-editor');
+      editor.focus();
+      if (cmd === 'createLink') {
+        const url = prompt('Link URL (https://...)');
+        if (!url) return;
+        document.execCommand('createLink', false, url);
+        return;
+      }
+      if (cmd === 'formatBlock') { document.execCommand('formatBlock', false, '<' + arg + '>'); return; }
+      document.execCommand(cmd, false, null);
+    }
+    function ohReviewRow(el) { return el.closest('tr.oh-review-row'); }
+    function ohToggleReview(btn, key) {
+      const row = btn.closest('tr').nextElementSibling;
+      if (!row || !row.classList.contains('oh-review-row')) return;
+      const open = row.style.display === 'none';
+      row.style.display = open ? '' : 'none';
+      if (open) ohOpenReviews.add(key); else ohOpenReviews.delete(key);
+      const tri = btn.querySelector('.tri');
+      if (tri) tri.textContent = open ? '▾' : '▸';
+    }
+    function ohEditReview(btn, id, index) {
+      const row = ohReviewRow(btn);
+      const s = ohStaff.find(x => x.id === id);
+      const h = s && s.salaryHistory ? s.salaryHistory[index] : null;
+      const editor = row.querySelector('.oh-rt-editor');
+      editor.innerHTML = (h && h.reviewNotes) ? h.reviewNotes : '<p><br></p>';
+      editor.onpaste = function(e) {
+        const html = e.clipboardData.getData('text/html');
+        const text = e.clipboardData.getData('text/plain');
+        if (!html && !text) return;
+        e.preventDefault();
+        document.execCommand('insertHTML', false, html ? ohRtClean(html) : ohEsc(text).replace(/\\r?\\n/g, '<br>'));
+      };
+      row.querySelector('.oh-review-view').style.display = 'none';
+      row.querySelector('.oh-review-actions').style.display = 'none';
+      row.querySelector('.oh-review-edit').style.display = 'block';
+      try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch (e) {}
+      editor.focus();
+    }
+    function ohCancelReview(btn) {
+      const row = ohReviewRow(btn);
+      row.querySelector('.oh-review-edit').style.display = 'none';
+      row.querySelector('.oh-review-view').style.display = '';
+      row.querySelector('.oh-review-actions').style.display = '';
+    }
+    async function ohSaveReview(btn, id, index) {
+      const row = ohReviewRow(btn);
+      const editor = row.querySelector('.oh-rt-editor');
+      const msg = row.querySelector('.oh-form-msg');
+      const html = editor.textContent.trim() ? ohRtClean(editor.innerHTML) : '';
+      btn.disabled = true;
+      msg.textContent = ''; msg.classList.remove('error');
+      try {
+        const res = await fetch('/api/overheads/staff/' + id + '/salary/' + index + '/review-notes', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ html }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+        const idx = ohStaff.findIndex(x => x.id === id);
+        if (idx >= 0) ohStaff[idx] = data.staff;
+        ohOpenReviews.add(id + '-' + index);
+        const wasOpen = document.querySelector('tr.row-detail[data-detail="' + id + '"]')?.classList.contains('open');
+        const wasOpenM = document.querySelector('[data-detail-m="' + id + '"]')?.classList.contains('open');
+        ohRender();
+        if (wasOpen) ohToggle(id);
+        if (wasOpenM) ohToggleMobile(id);
+      } catch (err) {
+        msg.textContent = err.message; msg.classList.add('error');
+        btn.disabled = false;
+      }
     }
 
     async function ohSaveHistoryRow(id, index) {
